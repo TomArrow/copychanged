@@ -5,9 +5,15 @@ using System.Text;
 using System.Threading.Tasks;
 using System.Numerics;
 using size_t = System.Int32; // update if this ever changes *shrug*
+using System.IO;
+using System.Threading;
 
 namespace copychanged
 {
+    internal class ReferenceBool {
+        public bool b = false;
+    }
+
     public static class VectorizedComparer
     {
 
@@ -98,6 +104,150 @@ namespace copychanged
                 }
             });
             return !anyFalse;
+        }
+
+        static private Task StartReadingStream(Stream stream, CancellationToken ct, Queue<byte[]> chunks, ReferenceBool unequal, int streamChunkLength)
+        {
+            Task task = Task.Factory.StartNew(() =>
+            {
+                Int64 dataRead = 0;
+
+                while (stream.Length > dataRead && !unequal.b)
+                {
+                    if (ct.IsCancellationRequested)
+                    {
+                        unequal.b = true;
+                        return;
+                    }
+                    byte[] buff = new byte[Math.Min(streamChunkLength, stream.Length - dataRead)];
+                    size_t amountRead = 0;
+                    while (amountRead < buff.Length && !unequal.b)
+                    {
+                        size_t readCount = stream.Read(buff, amountRead, buff.Length - amountRead);
+                        amountRead += readCount;
+                        dataRead += readCount;
+                        if (readCount == 0)
+                        {
+                            if (readCount < buff.Length)
+                            {
+                                unequal.b = true; // technically this is just some weird read error but lets just say its unequal for now *shrug*
+                            }
+                            break;
+                        }
+                    }
+                    if (unequal.b) return;
+
+                    lock (chunks)
+                    {
+                        chunks.Enqueue(buff);
+                    }
+
+                }
+
+
+            }, ct, TaskCreationOptions.LongRunning, TaskScheduler.Default).ContinueWith((t) =>
+            {
+                throw new Exception("Stream reading failed", t.Exception);
+            }, TaskContinuationOptions.OnlyOnFaulted);
+
+            return task;
+        }
+
+        const int streamChunkLengthDefault = 1 << 28;  //chunkLengthDefault * 32; // could instead use amount of cpu cores or sth?
+        static public bool Same(Stream in1, Stream in2, CancellationToken ct, int streamChunkLength = streamChunkLengthDefault)
+        {
+            if (in1.Length != in2.Length)
+            {
+                return false;
+            }
+
+            Queue<byte[]> compareChunks1 = new Queue<byte[]>();
+            Queue<byte[]> compareChunks2 = new Queue<byte[]>();
+
+            ReferenceBool unequal = new ReferenceBool { b=false};
+
+            Task read1 = StartReadingStream(in1, ct, compareChunks1, unequal, streamChunkLength);
+            Task read2 = StartReadingStream(in2, ct, compareChunks2, unequal, streamChunkLength);
+
+            while (true)
+            {
+                if (unequal.b)
+                {
+                    break;
+                }
+                bool allDone = read1.IsCompleted && read2.IsCompleted;
+                int count1 = 0;
+                int count2 = 0;
+                lock (compareChunks1)
+                {
+                    count1 = compareChunks1.Count;
+                }
+                lock (compareChunks2)
+                {
+                    count2 = compareChunks2.Count;
+                }
+                if (count1 == 0 || count2 == 0)
+                {
+                    if (allDone)
+                    {
+                        break;
+                    }
+                    System.Threading.Thread.Sleep(10);
+                    continue;
+                }
+
+                byte[] chunk1, chunk2;
+                lock (compareChunks1)
+                {
+                    chunk1 = compareChunks1.Dequeue();
+                }
+                lock (compareChunks2)
+                {
+                    chunk2 = compareChunks2.Dequeue();
+                }
+                if (!SameMultiThread(chunk1, chunk2))
+                {
+                    unequal.b = true;
+                    //read1.Wait();
+                    //read2.Wait();
+                    return false;
+                }
+            }
+
+            //Task.Factory.StartNew(() =>
+            //{
+            //    Int64 dataRead = 0;
+
+            //    while(in1.Length > dataRead && !unequal.b)
+            //    {
+            //        byte[] buff = new byte[Math.Min(streamChunkLength, in1.Length - dataRead)];
+            //        size_t amountRead = 0;
+            //        while(amountRead < buff.Length && !unequal.b)
+            //        {
+            //            size_t readCount = in1.Read(buff, amountRead, buff.Length - amountRead);
+            //            amountRead += readCount;
+            //            if(readCount == 0)
+            //            {
+            //                if(readCount < buff.Length)
+            //                {
+            //                    unequal.b = true; // technically this is just some weird read error but lets just say its unequal for now *shrug*
+            //                }
+            //                break;
+            //            }
+            //        }
+            //        if (unequal.b) return;
+
+            //        compareChunks1.Enqueue(buff);
+
+            //    }
+
+
+            //}, ct, TaskCreationOptions.LongRunning, TaskScheduler.Default).ContinueWith((t) =>
+            //{
+            //    throw new Exception("Stream reading failed",t.Exception);
+            //}, TaskContinuationOptions.OnlyOnFaulted);
+
+            return !unequal.b;
         }
     }
 }

@@ -4,6 +4,8 @@ using System.Numerics;
 using System;
 using System.Diagnostics;
 using System.Linq;
+using System.IO;
+using System.Threading;
 
 namespace copychanged_tests
 {
@@ -113,6 +115,61 @@ namespace copychanged_tests
 
                 Trace.WriteLine($"{secondsSpentMultiThread[bitshift]} seconds to compare {totalCompared} bytes (MultiThread {bitshift} bit shift ({1<<bitshift} byte chunks))");
             }
+
+        }
+        [TestMethod]
+        public void TestVectorComparerStreamMultiThread()
+        {
+            Random rnd = new Random();
+
+            Int64 totalCompared = 0;
+            double secondsSpent = 0;
+            double secondsSpentMultiThread = 0;
+
+            Stopwatch sw = new Stopwatch();
+            for (int t = 0; t < 30; t++)
+            {
+                byte[] data = new byte[rnd.Next(1_000_000, 100_000_0001)];
+
+                //for (int i = 0; i < data.Length; i++)
+                //{
+                //   data[i] = (byte)rnd.Next(0, 256);
+                //}
+
+                byte[] data2 = (byte[])data.Clone();
+
+                bool changed = rnd.Next(0, 2) > 0;
+                if (changed)
+                {
+                    int changedposition = rnd.Next(0, data2.Length);
+                    totalCompared += changedposition;
+                    data2[changedposition]++;
+                }
+                else
+                {
+                    totalCompared += data.Length;
+                }
+
+                MemoryStream ms = new MemoryStream(data);
+                MemoryStream ms2 = new MemoryStream(data2);
+
+                CancellationTokenSource cts = new CancellationTokenSource();
+                CancellationToken ct = cts.Token;
+
+                sw.Restart();
+                bool same = VectorizedComparer.Same((Stream)ms, (Stream)ms2,ct);
+                sw.Stop();
+                secondsSpent += (double)sw.ElapsedTicks / (double)Stopwatch.Frequency;
+                Assert.AreEqual(same, !changed);
+
+                sw.Restart();
+                bool test = VectorizedComparer.SameMultiThread(data, data2);
+                sw.Stop();
+                Assert.AreEqual(test, !changed);
+                secondsSpentMultiThread += (double)sw.ElapsedTicks / (double)Stopwatch.Frequency;
+            }
+            Trace.WriteLine($"{secondsSpent} seconds to compare {totalCompared} bytes (stream)"); 
+            Trace.WriteLine($"{secondsSpentMultiThread} seconds to compare {totalCompared} bytes (multithread)");
 
         }
         [TestMethod]
