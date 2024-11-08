@@ -106,7 +106,7 @@ namespace copychanged
             return !anyFalse;
         }
 
-        static private Task StartReadingStream(Stream stream, CancellationToken ct, Queue<byte[]> chunks, ReferenceBool unequal, int streamChunkLength)
+        static private Task StartReadingStream(Stream stream, CancellationToken ct, Queue<byte[]> chunks, object chunksLock, ReferenceBool unequal, int streamChunkLength)
         {
             Task task = Task.Factory.StartNew(() =>
             {
@@ -137,9 +137,10 @@ namespace copychanged
                     }
                     if (unequal.b) return;
 
-                    lock (chunks)
+                    lock (chunksLock)
                     {
                         chunks.Enqueue(buff);
+                        System.Threading.Monitor.Pulse(chunksLock);
                     }
 
                 }
@@ -161,13 +162,15 @@ namespace copychanged
                 return false;
             }
 
+            object chunksLock = new object();
+
             Queue<byte[]> compareChunks1 = new Queue<byte[]>();
             Queue<byte[]> compareChunks2 = new Queue<byte[]>();
 
             ReferenceBool unequal = new ReferenceBool { b=false};
 
-            Task read1 = StartReadingStream(in1, ct, compareChunks1, unequal, streamChunkLength);
-            Task read2 = StartReadingStream(in2, ct, compareChunks2, unequal, streamChunkLength);
+            Task read1 = StartReadingStream(in1, ct, compareChunks1, chunksLock, unequal, streamChunkLength);
+            Task read2 = StartReadingStream(in2, ct, compareChunks2, chunksLock, unequal, streamChunkLength);
 
             while (true)
             {
@@ -192,17 +195,17 @@ namespace copychanged
                     {
                         break;
                     }
-                    System.Threading.Thread.Sleep(10);
+                    lock (chunksLock)
+                    {
+                        System.Threading.Monitor.Wait(chunksLock);
+                    }
                     continue;
                 }
 
                 byte[] chunk1, chunk2;
-                lock (compareChunks1)
+                lock (chunksLock)
                 {
                     chunk1 = compareChunks1.Dequeue();
-                }
-                lock (compareChunks2)
-                {
                     chunk2 = compareChunks2.Dequeue();
                 }
                 if (!SameMultiThread(chunk1, chunk2))
