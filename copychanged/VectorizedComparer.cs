@@ -7,6 +7,7 @@ using System.Numerics;
 using size_t = System.Int32; // update if this ever changes *shrug*
 using System.IO;
 using System.Threading;
+using System.Diagnostics;
 
 namespace copychanged
 {
@@ -105,16 +106,52 @@ namespace copychanged
             });
             return !anyFalse;
         }
-
-        static private Task StartReadingStream(Stream stream, CancellationToken ct, Queue<byte[]> chunks, object chunksLock, ReferenceBool unequal, int streamChunkLength)
+        
+        public static bool SameStreamWholeTest(Stream stream, Stream stream2, size_t chunkLength = chunkLengthDefault)
         {
+            if (stream.Length != stream2.Length)
+            {
+                return false;
+            }
+            byte[] data = new byte[stream.Length];
+            byte[] data2 = new byte[stream2.Length];
+            stream.Read(data, 0, data.Length);
+            stream2.Read(data2, 0, data2.Length);
+            if (data.Length <= chunkLength)
+            {
+                return Same(data, data2);
+            }
+            size_t chunkCount = data.Length / chunkLength;
+            if(data.Length % chunkLength != 0)
+            {
+                chunkCount++;
+            }
+            bool anyFalse = false;
+            Parallel.For(0,chunkCount,(i,state)=>
+            {
+                if (!Same(data,data2,ref anyFalse,chunkLength * i,chunkLength*i+chunkLength-1))
+                {
+                    anyFalse = true;
+                    state.Break();
+                }
+            });
+            return !anyFalse;
+        }
+
+        static private Task StartReadingStream(Stream stream, CancellationToken ct, Queue<byte[]> chunks, object chunksLock, ReferenceBool unequal, ReferenceBool finished, int streamChunkLength)
+        {
+
+            if (streamChunkLength == 0)
+            {
+                streamChunkLength = streamChunkLengthDefault;
+            }
             Task task = Task.Factory.StartNew(() =>
             {
                 Int64 dataRead = 0;
 
                 while (stream.Length > dataRead && !unequal.b)
                 {
-                    if (ct.IsCancellationRequested)
+                    if (ct.IsCancellationRequested || unequal.b)
                     {
                         unequal.b = true;
                         return;
@@ -139,6 +176,7 @@ namespace copychanged
 
                     lock (chunksLock)
                     {
+                        //Debug.WriteLine($"StartReadingStream(s,s): adding chunk ({buff.Length} bytes)");
                         chunks.Enqueue(buff);
                         System.Threading.Monitor.Pulse(chunksLock);
                     }
@@ -148,73 +186,93 @@ namespace copychanged
 
             }, ct, TaskCreationOptions.LongRunning, TaskScheduler.Default).ContinueWith((t) =>
             {
+                lock (chunksLock)
+                {
+                    finished.b = true;
+                    System.Threading.Monitor.Pulse(chunksLock);
+                }
                 throw new Exception("Stream reading failed", t.Exception);
-            }, TaskContinuationOptions.OnlyOnFaulted);
+            }, TaskContinuationOptions.OnlyOnFaulted).ContinueWith((t)=> {
+                lock (chunksLock)
+                {
+                    finished.b = true;
+                    System.Threading.Monitor.Pulse(chunksLock);
+                }
+            });
 
             return task;
         }
 
         const int streamChunkLengthDefault = 1 << 28;  //chunkLengthDefault * 32; // could instead use amount of cpu cores or sth?
-        static public bool Same(Stream in1, Stream in2, CancellationToken ct, int streamChunkLength = streamChunkLengthDefault)
+        static public bool Same(Stream in1, Stream in2, CancellationToken ct, int streamChunkLength = streamChunkLengthDefault, bool forcefinish=false)
         {
             if (in1.Length != in2.Length)
             {
                 return false;
             }
 
+            if(streamChunkLength == 0)
+            {
+                streamChunkLength = streamChunkLengthDefault;
+            }
+
+            Debug.WriteLine($"Same(s,s): starting compare; chunkLength: {streamChunkLength}, forceFinish: {forcefinish}");
+
             object chunksLock = new object();
 
             Queue<byte[]> compareChunks1 = new Queue<byte[]>();
             Queue<byte[]> compareChunks2 = new Queue<byte[]>();
 
+            UInt64 totalCompared = 0;
+
+            ReferenceBool finished1 = new ReferenceBool { b=false};
+            ReferenceBool finished2 = new ReferenceBool { b=false};
             ReferenceBool unequal = new ReferenceBool { b=false};
 
-            Task read1 = StartReadingStream(in1, ct, compareChunks1, chunksLock, unequal, streamChunkLength);
-            Task read2 = StartReadingStream(in2, ct, compareChunks2, chunksLock, unequal, streamChunkLength);
+            Task read1 = StartReadingStream(in1, ct, compareChunks1, chunksLock, unequal, finished1, streamChunkLength);
+            Task read2 = StartReadingStream(in2, ct, compareChunks2, chunksLock, unequal, finished2, streamChunkLength);
 
             while (true)
             {
                 if (unequal.b)
                 {
+                    Debug.WriteLine("Same(s,s): unequal,breaking.");
                     break;
                 }
-                bool allDone = read1.IsCompleted && read2.IsCompleted;
-                int count1 = 0;
-                int count2 = 0;
-                lock (compareChunks1)
-                {
-                    count1 = compareChunks1.Count;
-                }
-                lock (compareChunks2)
-                {
-                    count2 = compareChunks2.Count;
-                }
-                if (count1 == 0 || count2 == 0)
-                {
-                    if (allDone)
-                    {
-                        break;
-                    }
-                    lock (chunksLock)
-                    {
-                        System.Threading.Monitor.Wait(chunksLock);
-                    }
-                    continue;
-                }
-
                 byte[] chunk1, chunk2;
                 lock (chunksLock)
                 {
+                    while ((compareChunks1.Count == 0 || compareChunks2.Count == 0) && (!finished1.b || !finished2.b))
+                    {
+                        Debug.WriteLine("Same(s,s): waiting for input");
+                        System.Threading.Monitor.Wait(chunksLock);
+                    }
+                    Debug.WriteLine("Same(s,s): processing status update");
+                    if (compareChunks1.Count == 0 || compareChunks2.Count == 0)
+                    {
+                        Debug.WriteLine("Same(s,s): finished");
+                        break; 
+                    }
+
+                    Debug.WriteLine("Same(s,s): dequeueing");
                     chunk1 = compareChunks1.Dequeue();
                     chunk2 = compareChunks2.Dequeue();
                 }
+
+                totalCompared += (UInt64)chunk1.Length;
+                Debug.WriteLine($"Same(s,s): comparing. progress: {totalCompared}/{in1.Length}/{in2.Length}");
                 if (!SameMultiThread(chunk1, chunk2))
                 {
+                    Debug.WriteLine("Same(s,s): unequal,done.");
                     unequal.b = true;
-                    //read1.Wait();
-                    //read2.Wait();
-                    return false;
+                    break;
                 }
+            }
+
+            if (forcefinish)
+            {
+                read1.Wait();
+                read2.Wait();
             }
 
             //Task.Factory.StartNew(() =>

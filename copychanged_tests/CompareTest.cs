@@ -173,6 +173,66 @@ namespace copychanged_tests
 
         }
         [TestMethod]
+        public void TestVectorComparerStreamMultiThreadWholeReadTest()
+        {
+            Random rnd = new Random();
+
+            Int64 totalCompared = 0;
+            double secondsSpent = 0;
+            double secondsSpentMultiThread = 0;
+
+            Stopwatch sw = new Stopwatch();
+            for (int t = 0; t < 10; t++)
+            {
+                byte[] data = new byte[rnd.Next(1_000_000, 100_000_0001)];
+
+                //for (int i = 0; i < data.Length; i++)
+                //{
+                //   data[i] = (byte)rnd.Next(0, 256);
+                //}
+
+                byte[] data2 = (byte[])data.Clone();
+
+                bool changed = rnd.Next(0, 2) > 0;
+                if (changed)
+                {
+                    int changedposition = rnd.Next(0, data2.Length);
+                    totalCompared += changedposition;
+                    data2[changedposition]++;
+                }
+                else
+                {
+                    totalCompared += data.Length;
+                }
+
+                MemoryStream ms = new MemoryStream(data,false);
+                MemoryStream ms2 = new MemoryStream(data2,false);
+
+                CancellationTokenSource cts = new CancellationTokenSource();
+                CancellationToken ct = cts.Token;
+
+                sw.Restart();
+                bool same = VectorizedComparer.Same(ms, ms2, ct,default,true);
+                sw.Stop();
+                secondsSpentMultiThread += (double)sw.ElapsedTicks / (double)Stopwatch.Frequency;
+                Assert.AreEqual(!changed,same);
+
+                ms.Seek(0, SeekOrigin.Begin);
+                ms2.Seek(0, SeekOrigin.Begin);
+
+                sw.Restart();
+                bool test = VectorizedComparer.SameStreamWholeTest((Stream)ms, (Stream)ms2);
+                sw.Stop();
+                secondsSpent += (double)sw.ElapsedTicks / (double)Stopwatch.Frequency;
+                Assert.AreEqual(!changed,test);
+
+                Trace.WriteLine($"Comparison {t}");
+            }
+            Trace.WriteLine($"{secondsSpent} seconds to compare {totalCompared} bytes (stream whole)"); 
+            Trace.WriteLine($"{secondsSpentMultiThread} seconds to compare {totalCompared} bytes (normal stream func)");
+
+        }
+        [TestMethod]
         public void TestVectorComparerMultiThreadSmallMany()
         {
             Random rnd = new Random();
