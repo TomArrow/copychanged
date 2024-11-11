@@ -123,6 +123,7 @@ namespace copychanged_tests
             Random rnd = new Random();
 
             Int64 totalCompared = 0;
+            double secondsSpentCreatingStream = 0;
             double secondsSpent = 0;
             double secondsSpentMultiThread = 0;
 
@@ -150,8 +151,18 @@ namespace copychanged_tests
                     totalCompared += data.Length;
                 }
 
+
+                sw.Restart();
                 MemoryStream ms = new MemoryStream(data);
                 MemoryStream ms2 = new MemoryStream(data2);
+                //MemoryStream ms = new MemoryStream(data.Length);
+                //ms.Write(data, 0, data.Length);
+                //ms.Seek(0, SeekOrigin.Begin);
+                //MemoryStream ms2 = new MemoryStream(data2.Length);
+                //ms2.Write(data2, 0, data2.Length);
+                //ms2.Seek(0, SeekOrigin.Begin);
+                sw.Stop();
+                secondsSpentCreatingStream += (double)sw.ElapsedTicks / (double)Stopwatch.Frequency;
 
                 CancellationTokenSource cts = new CancellationTokenSource();
                 CancellationToken ct = cts.Token;
@@ -170,6 +181,7 @@ namespace copychanged_tests
             }
             Trace.WriteLine($"{secondsSpent} seconds to compare {totalCompared} bytes (stream)"); 
             Trace.WriteLine($"{secondsSpentMultiThread} seconds to compare {totalCompared} bytes (multithread)");
+            Trace.WriteLine($"{secondsSpentCreatingStream} seconds to create stream");
 
         }
         [TestMethod]

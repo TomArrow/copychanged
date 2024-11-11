@@ -113,10 +113,18 @@ namespace copychanged
             {
                 return false;
             }
+            Stopwatch sw = new Stopwatch();
+            sw.Start();
             byte[] data = new byte[stream.Length];
             byte[] data2 = new byte[stream2.Length];
             stream.Read(data, 0, data.Length);
             stream2.Read(data2, 0, data2.Length);
+            sw.Stop();
+            double secs = (double)sw.ElapsedTicks / (double)Stopwatch.Frequency;
+#if DEBUG
+            Trace.WriteLine("DEBUG MODE");
+#endif
+            Trace.WriteLine($"Reading 2x{stream.Length}byte streams into byte[] took {secs} secs");
             if (data.Length <= chunkLength)
             {
                 return Same(data, data2);
@@ -216,8 +224,12 @@ namespace copychanged
                 streamChunkLength = streamChunkLengthDefault;
             }
 
-            Debug.WriteLine($"Same(s,s): starting compare; chunkLength: {streamChunkLength}, forceFinish: {forcefinish}");
+            in1.Seek(0, SeekOrigin.Begin);
+            in2.Seek(0, SeekOrigin.Begin);
 
+#if DEBUGSTREAM
+            Debug.WriteLine($"Same(s,s): starting compare; chunkLength: {streamChunkLength}, forceFinish: {forcefinish}");
+#endif
             object chunksLock = new object();
 
             Queue<byte[]> compareChunks1 = new Queue<byte[]>();
@@ -236,7 +248,9 @@ namespace copychanged
             {
                 if (unequal.b)
                 {
+#if DEBUGSTREAM
                     Debug.WriteLine("Same(s,s): unequal,breaking.");
+#endif
                     break;
                 }
                 byte[] chunk1, chunk2;
@@ -244,26 +258,37 @@ namespace copychanged
                 {
                     while ((compareChunks1.Count == 0 || compareChunks2.Count == 0) && (!finished1.b || !finished2.b))
                     {
+#if DEBUGSTREAM
                         Debug.WriteLine("Same(s,s): waiting for input");
+#endif
                         System.Threading.Monitor.Wait(chunksLock);
                     }
+#if DEBUGSTREAM
                     Debug.WriteLine("Same(s,s): processing status update");
+#endif
                     if (compareChunks1.Count == 0 || compareChunks2.Count == 0)
                     {
+#if DEBUGSTREAM
                         Debug.WriteLine("Same(s,s): finished");
+#endif
                         break; 
                     }
-
+#if DEBUGSTREAM
                     Debug.WriteLine("Same(s,s): dequeueing");
+#endif
                     chunk1 = compareChunks1.Dequeue();
                     chunk2 = compareChunks2.Dequeue();
                 }
 
                 totalCompared += (UInt64)chunk1.Length;
+#if DEBUGSTREAM
                 Debug.WriteLine($"Same(s,s): comparing. progress: {totalCompared}/{in1.Length}/{in2.Length}");
+#endif
                 if (!SameMultiThread(chunk1, chunk2))
                 {
+#if DEBUGSTREAM
                     Debug.WriteLine("Same(s,s): unequal,done.");
+#endif
                     unequal.b = true;
                     break;
                 }
@@ -275,38 +300,6 @@ namespace copychanged
                 read2.Wait();
             }
 
-            //Task.Factory.StartNew(() =>
-            //{
-            //    Int64 dataRead = 0;
-
-            //    while(in1.Length > dataRead && !unequal.b)
-            //    {
-            //        byte[] buff = new byte[Math.Min(streamChunkLength, in1.Length - dataRead)];
-            //        size_t amountRead = 0;
-            //        while(amountRead < buff.Length && !unequal.b)
-            //        {
-            //            size_t readCount = in1.Read(buff, amountRead, buff.Length - amountRead);
-            //            amountRead += readCount;
-            //            if(readCount == 0)
-            //            {
-            //                if(readCount < buff.Length)
-            //                {
-            //                    unequal.b = true; // technically this is just some weird read error but lets just say its unequal for now *shrug*
-            //                }
-            //                break;
-            //            }
-            //        }
-            //        if (unequal.b) return;
-
-            //        compareChunks1.Enqueue(buff);
-
-            //    }
-
-
-            //}, ct, TaskCreationOptions.LongRunning, TaskScheduler.Default).ContinueWith((t) =>
-            //{
-            //    throw new Exception("Stream reading failed",t.Exception);
-            //}, TaskContinuationOptions.OnlyOnFaulted);
 
             return !unequal.b;
         }
