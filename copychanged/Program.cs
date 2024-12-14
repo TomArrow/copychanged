@@ -9,8 +9,7 @@ namespace copychanged
         {
             try
             {
-                //string[] files = Directory.GetFiles(@"Z:\tmp\testtesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttest\testtesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttest\testtesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttest\testtesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttest\");
-                string[] files = Directory.GetFiles(@"\\MYCLOUDEX2ULTRA\Public\tmp\testtesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttest\testtesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttest\testtesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttest\testtesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttest\");
+                string[] files = Directory.GetFiles(@"Z:\tmp\testtesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttest\testtesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttest\testtesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttest\testtesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttest\");
                 Console.WriteLine();
                 if(files.Length == 0)
                 {

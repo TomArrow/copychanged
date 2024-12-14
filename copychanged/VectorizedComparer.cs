@@ -206,12 +206,13 @@ namespace copychanged
                     finished.b = true;
                     System.Threading.Monitor.Pulse(chunksLock);
                 }
+                //throw new Exception("Test", t.Exception);
             });
 
             return task;
         }
 
-        const int streamChunkLengthDefault = 1 << 28;  //chunkLengthDefault * 32; // could instead use amount of cpu cores or sth?
+        const int streamChunkLengthDefault = 1 << 26;  //chunkLengthDefault * 32; // could instead use amount of cpu cores or sth?
         static public bool Same(Stream in1, Stream in2, CancellationToken ct, int streamChunkLength = streamChunkLengthDefault, bool forcefinish=false)
         {
             if (in1.Length != in2.Length)
