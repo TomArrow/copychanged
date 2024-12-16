@@ -28,6 +28,7 @@ namespace copychanged
             string folder2 = Path.GetFullPath(args[1]);
 
             List<FileToCopy> filesToCopy = new List<FileToCopy>();
+            List<FileToCopy> filesToFix = new List<FileToCopy>();
 
             UInt64 totalCompared = 0;
 
@@ -37,11 +38,15 @@ namespace copychanged
 
             sw.Start();
 
-            DoFolderRecursive(folder1, folder2, folder1, filesToCopy, ref totalCompared, sw);
+            DoFolderRecursive(folder1, folder2, folder1, filesToCopy,filesToFix, ref totalCompared, sw);
 
             Console.WriteLine();
             Console.WriteLine($"{filesToCopy.Count} files must be copied.");
-
+            Console.WriteLine($"{filesToFix.Count} files must be fixed:");
+            foreach(FileToCopy fileToFix in filesToFix)
+            {
+                Console.WriteLine($"{fileToFix.to}");
+            }
 
 
             //for (int i = 0; i < 10; i++)
@@ -74,7 +79,7 @@ namespace copychanged
             //Console.ReadKey();
         }
 
-        static void DoFolderRecursive(string basePathReference, string basePathDestination, string reference, List<FileToCopy> filesToCopy, ref UInt64 totalCompared, Stopwatch sw)
+        static void DoFolderRecursive(string basePathReference, string basePathDestination, string reference, List<FileToCopy> filesToCopy, List<FileToCopy> filesToFix, ref UInt64 totalCompared, Stopwatch sw)
         {
             if (!Directory.Exists(reference))
             {
@@ -117,9 +122,9 @@ namespace copychanged
                     string bpsString = bytesPerSecond.ToString("#,##0.00");
                     Console.Write($"\r{bpsString} bytes per second");
 
-                    if (same)
+                    if (!same)
                     {
-                        filesToCopy.Add(new FileToCopy()
+                        filesToFix.Add(new FileToCopy()
                         {
                             from = file,
                             to = targetFile,
@@ -137,7 +142,7 @@ namespace copychanged
             string[] folders = Directory.GetDirectories(reference);
             foreach (string folder in folders)
             {
-                DoFolderRecursive(basePathReference, basePathDestination, folder, filesToCopy,ref totalCompared,sw);
+                DoFolderRecursive(basePathReference, basePathDestination, folder, filesToCopy,filesToFix,ref totalCompared,sw);
             }
 
         }
