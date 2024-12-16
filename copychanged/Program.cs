@@ -1,5 +1,7 @@
 ﻿using System;
+using System.Diagnostics;
 using System.IO;
+using System.Threading;
 
 namespace copychanged
 {
@@ -7,32 +9,33 @@ namespace copychanged
     {
         static void Main(string[] args)
         {
-            try
+            for(int i = 0; i < 10; i++)
             {
-                string[] files = Directory.GetFiles(@"Z:\tmp\testtesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttest\testtesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttest\testtesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttest\testtesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttesttest\");
-                Console.WriteLine();
-                if(files.Length == 0)
+                try
                 {
-                    return;
+                    string file1 = args[0];
+                    string file2 = args[1];
+                    CancellationTokenSource cts = new CancellationTokenSource();
+
+                    Stopwatch sw = new Stopwatch();
+                    sw.Restart();
+                    bool same;
+                    using(FileStream fs1 = File.OpenRead(file1))
+                    {
+                        using(FileStream fs2 = File.OpenRead(file2))
+                        {
+                            same = VectorizedComparer.Same(fs1, fs2, cts.Token, default, true);
+                        }
+                    }
+                    sw.Stop();
+                    double time = (double)sw.ElapsedTicks / (double)Stopwatch.Frequency;
+                    Console.WriteLine($"Comparison took {time} seconds. Same: {same}");
                 }
-                string file = files[0];
-                string ext = Path.GetExtension(file);
-                if (ext.Equals(".txt", StringComparison.OrdinalIgnoreCase))
+                catch (Exception e)
                 {
-                    File.Move(file, Path.ChangeExtension(file, ".test"));
-                    Console.WriteLine($"Moved {file} to .test");
-                }
-                else if(ext.Equals(".test", StringComparison.OrdinalIgnoreCase))
-                {
-                    File.Move(file, Path.ChangeExtension(file, ".txt"));
-                    Console.WriteLine($"Moved {file} to .txt");
+                    Console.WriteLine(e.ToString());
                 }
             }
-            catch (Exception e)
-            {
-                Console.WriteLine(e.ToString());
-            }
-            Console.WriteLine("Hello World!");
             Console.ReadKey();
         }
     }
