@@ -16,16 +16,59 @@ namespace copychanged
 
     class Program
     {
+        static void PrintHelp()
+        {
+
+            Console.WriteLine("Usage: copychanged [-n,--donew] [-c,--dochanged] referencefolder destinationfolder");
+            Console.WriteLine("Optional param meaning:");
+            Console.WriteLine("-n,--donew        Copy files that didn't exist yet.");
+            Console.WriteLine("-c,--dochanged    Copy files that are different (overwrite!).");
+            Console.WriteLine("By default you are only told the amount of needed copy operations, no copying happens.");
+            Console.WriteLine("Copy operations are ALWAYS verified and will be repeated if a difference is found.");
+        }
+
         static void Main(string[] args)
         {
-            if(args.Length != 2)
+            if(args.Length < 2)
             {
-                Console.WriteLine("Call with 2 arguments: Reference folder and destination folder");
+                PrintHelp();
                 return;
             }
 
-            string folder1 = Path.GetFullPath(args[0]);
-            string folder2 = Path.GetFullPath(args[1]);
+            bool doNew = false;
+            bool doChanged = false;
+
+            string folder1 = null;
+            string folder2 = null;
+
+            foreach(string arg in args)
+            {
+                if (arg.Equals("--donew",StringComparison.OrdinalIgnoreCase) || arg.Equals("-n", StringComparison.OrdinalIgnoreCase))
+                {
+                    Console.WriteLine("--donew/-n option detected. Will copy files that don't exist yet.");
+                    doNew = true;
+                }
+                else if (arg.Equals("--dochanged",StringComparison.OrdinalIgnoreCase) || arg.Equals("-c", StringComparison.OrdinalIgnoreCase))
+                {
+                    Console.WriteLine("--dochanged/-c option detected. Will overwrite files that changed.");
+                    doChanged = true;
+                } else if(folder1 == null)
+                {
+                    folder1 = arg;
+                } else if(folder2 == null)
+                {
+                    folder2 = arg;
+                }
+                else
+                {
+                    Console.WriteLine($"Too many arguments/unrecognized argument: {arg}");
+                    PrintHelp();
+                    return;
+                }
+            }
+
+            folder1 = Path.GetFullPath(folder1);
+            folder2 = Path.GetFullPath(folder2);
 
             List<FileToCopy> filesToCopy = new List<FileToCopy>();
             List<FileToCopy> filesToFix = new List<FileToCopy>();
@@ -41,11 +84,46 @@ namespace copychanged
             DoFolderRecursive(folder1, folder2, folder1, filesToCopy,filesToFix, ref totalCompared, sw);
 
             Console.WriteLine();
-            Console.WriteLine($"{filesToCopy.Count} files must be copied.");
-            Console.WriteLine($"{filesToFix.Count} files must be fixed:");
+            Console.WriteLine($"{filesToCopy.Count} files don't exist yet.");
+            Console.WriteLine($"{filesToFix.Count} files are different:");
             foreach(FileToCopy fileToFix in filesToFix)
             {
                 Console.WriteLine($"{fileToFix.to}");
+            }
+
+            CancellationTokenSource cts = new CancellationTokenSource();
+
+            if (doChanged)
+            {
+                Console.WriteLine("Overwriting changed files now"); 
+                foreach (FileToCopy fileToFix in filesToFix)
+                {
+                    Console.Write($"{fileToFix.to}...");
+                    try
+                    {
+                        bool different = true;
+                        int currentAttempt = 0;
+                        while (different)
+                        {
+                            File.Delete(fileToFix.to);
+                            File.Copy(fileToFix.from, fileToFix.to);
+                            different = !FilesAreSame(fileToFix.from, fileToFix.to,cts.Token);
+                            if (different)
+                            {
+                                currentAttempt++;
+                                Console.Write($"Overwritten file is STILL different. Retry {currentAttempt}....");
+                            }
+                            else
+                            {
+                                Console.Write($"File successfully updated.");
+                            }
+                        }
+                    } catch(Exception ex)
+                    {
+                        Console.Write($"Error happened when trying to overwrite.");
+                    }
+                    Console.WriteLine();
+                }
             }
 
 
@@ -77,6 +155,17 @@ namespace copychanged
             //    }
             //}
             //Console.ReadKey();
+        }
+
+        static bool FilesAreSame(string file1, string file2, CancellationToken ct)
+        {
+            using (FileStream fs1 = File.OpenRead(file1))
+            {
+                using (FileStream fs2 = File.OpenRead(file2))
+                {
+                    return VectorizedComparer.Same(fs1, fs2, ct, default, true);
+                }
+            }
         }
 
         static void DoFolderRecursive(string basePathReference, string basePathDestination, string reference, List<FileToCopy> filesToCopy, List<FileToCopy> filesToFix, ref UInt64 totalCompared, Stopwatch sw)
