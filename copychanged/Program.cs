@@ -21,8 +21,8 @@ namespace copychanged
     {
         public string folder1 { get; set; }  = null;
         public string folder2 { get; set; }  = null;
+        public List<FileToCopy> filesToFix { get; set; } = new List<FileToCopy>();
         public List<FileToCopy> filesToCopy { get; set; }  = new List<FileToCopy>();
-        public List<FileToCopy> filesToFix { get; set; }  = new List<FileToCopy>();
         public UInt64 totalCompared { get; set; }  = 0;
         public double totalSecondsTaken { get; set; }  = 0;
 
