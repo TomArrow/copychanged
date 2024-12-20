@@ -3,17 +3,29 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Text;
+using System.Text.Json;
 using System.Threading;
 
 namespace copychanged
 {
 
     class FileToCopy {
-        public string from;
-        public string to;
-        public UInt64 size;
-        public UInt64 sizeTarget;
-        public bool existsAndDifferent;
+        public string from { get; set; }
+        public string to { get; set; }
+        public UInt64 size { get; set; }
+        public UInt64 sizeTarget { get; set; }
+        public bool existsAndDifferent { get; set; }
+    }
+
+    class PostAnalysisState
+    {
+        public string folder1 { get; set; }  = null;
+        public string folder2 { get; set; }  = null;
+        public List<FileToCopy> filesToCopy { get; set; }  = new List<FileToCopy>();
+        public List<FileToCopy> filesToFix { get; set; }  = new List<FileToCopy>();
+        public UInt64 totalCompared { get; set; }  = 0;
+        public double totalSecondsTaken { get; set; }  = 0;
+
     }
 
 
@@ -28,8 +40,39 @@ namespace copychanged
             Console.WriteLine("-c,--dochanged    Copy files that are different (overwrite!).");
             Console.WriteLine("-l,--log          Log what was done into _copychanged_copy.log and _copychanged_fix.log.");
             Console.WriteLine("-v,--verbose      Logging will include list of files that need to be copied (not shown by default to avoid spam). By default, _copychanged_copy.log only contains any errors or retries during copying and the count of files.");
+            Console.WriteLine("-s,--save         Saves a serialized list of files that need to be processed in _copychanged_list.json");
+            Console.WriteLine("-l,--load         Loads a serialized list of files that need to be processed from _copychanged_list.json");
             Console.WriteLine("By default you are only told the amount of needed copy operations, no copying happens.");
             Console.WriteLine("Copy operations are ALWAYS verified and will be repeated if a difference is found.");
+            Console.WriteLine("--save and --load work INDEPENDENTLY of --donew and --dochanged. You can do both or either.");
+        }
+
+        static JsonSerializerOptions jsonOpts = new JsonSerializerOptions() {NumberHandling= System.Text.Json.Serialization.JsonNumberHandling.AllowNamedFloatingPointLiterals| System.Text.Json.Serialization.JsonNumberHandling.AllowReadingFromString, WriteIndented = true };
+
+        static PostAnalysisState RunCompare(string folder1, string folder2)
+        {
+            PostAnalysisState state = new PostAnalysisState();
+            state.folder1 = Path.GetFullPath(folder1);
+            state.folder2 = Path.GetFullPath(folder2);
+
+            state.filesToCopy = new List<FileToCopy>();
+            state.filesToFix = new List<FileToCopy>();
+
+            state.totalCompared = 0;
+
+            Console.Write("\nStarting file compare...");
+
+            Stopwatch sw = new Stopwatch();
+
+            sw.Start();
+
+            DoFolderRecursive(state.folder1, state.folder2, state.folder1, state, sw);
+
+            sw.Stop();
+
+            state.totalSecondsTaken = (double)sw.ElapsedTicks / (double)Stopwatch.Frequency;
+
+            return state;
         }
 
         static void Main(string[] args)
@@ -44,6 +87,8 @@ namespace copychanged
             bool doChanged = false;
             bool doLog = false;
             bool verboseLog = false;
+            bool doSave = false;
+            bool doLoad = false;
 
             string folder1 = null;
             string folder2 = null;
@@ -55,6 +100,16 @@ namespace copychanged
                     Console.WriteLine("--donew/-n option detected. Will copy files that don't exist yet.");
                     doNew = true;
                 }
+                else if (arg.Equals("--save",StringComparison.OrdinalIgnoreCase) || arg.Equals("-s", StringComparison.OrdinalIgnoreCase))
+                {
+                    Console.WriteLine("--save/-s option detected. Will save analysis state to _copychanged_list.json");
+                    doSave = true;
+                } 
+                else if (arg.Equals("--load",StringComparison.OrdinalIgnoreCase) || arg.Equals("-l", StringComparison.OrdinalIgnoreCase))
+                {
+                    Console.WriteLine("--load/-l option detected. Will load analysis state from _copychanged_list.json");
+                    doLoad = true;
+                } 
                 else if (arg.Equals("--dochanged",StringComparison.OrdinalIgnoreCase) || arg.Equals("-c", StringComparison.OrdinalIgnoreCase))
                 {
                     Console.WriteLine("--dochanged/-c option detected. Will overwrite files that changed.");
@@ -84,26 +139,66 @@ namespace copychanged
                 }
             }
 
-            folder1 = Path.GetFullPath(folder1);
-            folder2 = Path.GetFullPath(folder2);
+            PostAnalysisState state = null;
 
-            List<FileToCopy> filesToCopy = new List<FileToCopy>();
-            List<FileToCopy> filesToFix = new List<FileToCopy>();
+            if (!doLoad)
+            {
+                if(string.IsNullOrWhiteSpace(folder1) || string.IsNullOrWhiteSpace(folder2))
+                {
+                    Console.WriteLine($"Not loading list, and didn't specify two folders.");
+                    PrintHelp();
+                    return;
+                }
+                state = RunCompare(folder1, folder2);
 
-            UInt64 totalCompared = 0;
+            }
+            else
+            {
+                if (!File.Exists("_copychanged_list.json"))
+                {
+                    Console.WriteLine($"Can't load list, _copychanged_list.json not found.");
+                    PrintHelp();
+                    return;
+                }
+                if(!string.IsNullOrWhiteSpace(folder1) || !string.IsNullOrWhiteSpace(folder2))
+                {
+                    Console.WriteLine($"Warning: Loading from _copychanged_list.json, but at least one folder was specified. Ignoring folder(s).");
+                }
+                try
+                {
+                    string json = File.ReadAllText("_copychanged_list.json");
+                    state = JsonSerializer.Deserialize<PostAnalysisState>(json, jsonOpts);
+                } catch(Exception ex)
+                {
+                    Console.WriteLine($"Error loading list from _copychanged_list.json: {ex.ToString()}");
+                    return;
+                }
+            }
 
-            Console.Write("\nStarting file compare...");
-            
-            Stopwatch sw = new Stopwatch();
+            if (doSave)
+            {
+                string json = JsonSerializer.Serialize(state, jsonOpts);
+                if (File.Exists("_copychanged_list.json")) // make up to 2 backups just in case. shitty way of doing it tho xd.
+                {
+                    if (File.Exists("_copychanged_list.json.bak"))
+                    {
+                        if (File.Exists("_copychanged_list.json.finalbak"))
+                        {
+                            File.Delete("_copychanged_list.json.finalbak");
+                        }
+                        File.Move("_copychanged_list.json.bak", "_copychanged_list.json.finalbak");
+                    }
+                    File.Move("_copychanged_list.json", "_copychanged_list.json.bak");
+                }
+                File.WriteAllText("_copychanged_list.json",json);
+            }
 
-            sw.Start();
 
-            DoFolderRecursive(folder1, folder2, folder1, filesToCopy,filesToFix, ref totalCompared, sw);
 
             Console.WriteLine();
-            Console.WriteLine($"{filesToCopy.Count} files don't exist yet.");
-            Console.WriteLine($"{filesToFix.Count} files are different:");
-            foreach(FileToCopy fileToFix in filesToFix)
+            Console.WriteLine($"{state.filesToCopy.Count} files don't exist yet.");
+            Console.WriteLine($"{state.filesToFix.Count} files are different:");
+            foreach(FileToCopy fileToFix in state.filesToFix)
             {
                 Console.WriteLine($"{fileToFix.to}");
             }
@@ -120,12 +215,12 @@ namespace copychanged
                 sb.AppendLine(header);
                 sb.AppendLine();
                 sb.AppendLine("Files to be fixed:");
-                UInt64 totalCount = (UInt64)filesToFix.Count;
+                UInt64 totalCount = (UInt64)state.filesToFix.Count;
                 UInt64 totalSize = 0;
                 UInt64 totalSizeDest = 0;
-                if (filesToFix.Count > 0)
+                if (state.filesToFix.Count > 0)
                 {
-                    foreach (FileToCopy fileToFix in filesToFix)
+                    foreach (FileToCopy fileToFix in state.filesToFix)
                     {
                         totalSize += fileToFix.size;
                         totalSizeDest += fileToFix.sizeTarget;
@@ -151,11 +246,11 @@ namespace copychanged
                 sb.AppendLine(header);
                 sb.AppendLine();
                 sb.AppendLine("Files to be copied:");
-                totalCount = (UInt64)filesToCopy.Count;
+                totalCount = (UInt64)state.filesToCopy.Count;
                 totalSize = 0;
-                if (filesToCopy.Count > 0)
+                if (state.filesToCopy.Count > 0)
                 {
-                    foreach (FileToCopy fileToCopy in filesToCopy)
+                    foreach (FileToCopy fileToCopy in state.filesToCopy)
                     {
                         totalSize += fileToCopy.size;
                         if (verboseLog)
@@ -181,10 +276,10 @@ namespace copychanged
 
             Int64 totalSuccess = 0;
             Int64 totalFail = 0;
-            if (doChanged && filesToFix.Count > 0)
+            if (doChanged && state.filesToFix.Count > 0)
             {
                 Console.WriteLine("Overwriting changed files now"); 
-                foreach (FileToCopy fileToFix in filesToFix)
+                foreach (FileToCopy fileToFix in state.filesToFix)
                 {
                     Console.Write($"{fileToFix.to}...");
                     int currentAttempt = 0;
@@ -237,10 +332,10 @@ namespace copychanged
 
             totalSuccess = 0;
             totalFail = 0;
-            if (doNew && filesToCopy.Count > 0)
+            if (doNew && state.filesToCopy.Count > 0)
             {
                 Console.WriteLine("Copying new files now"); 
-                foreach (FileToCopy fileToCopy in filesToCopy)
+                foreach (FileToCopy fileToCopy in state.filesToCopy)
                 {
                     Console.Write($"{fileToCopy.to}...");
                     int currentAttempt = 0;
@@ -251,6 +346,10 @@ namespace copychanged
                         {
                             if (File.Exists(fileToCopy.to))
                             {
+                                if (currentAttempt == 0)
+                                {
+                                    Console.Write($"wtf already exists... deleting...");
+                                }
                                 File.Delete(fileToCopy.to);
                             } else if (currentAttempt != 0)
                             {
@@ -334,7 +433,7 @@ namespace copychanged
         }
 
         // TODO more try here?
-        static void DoFolderRecursive(string basePathReference, string basePathDestination, string reference, List<FileToCopy> filesToCopy, List<FileToCopy> filesToFix, ref UInt64 totalCompared, Stopwatch sw)
+        static void DoFolderRecursive(string basePathReference, string basePathDestination, string reference, PostAnalysisState state, Stopwatch sw)
         {
             if (!Directory.Exists(reference))
             {
@@ -353,7 +452,7 @@ namespace copychanged
                     FileInfo info = new FileInfo(file);
 
                     //Console.WriteLine($"target file {targetFile} doesn't exist. must copy.");
-                    filesToCopy.Add(new FileToCopy() { 
+                    state.filesToCopy.Add(new FileToCopy() { 
                         from=file,
                         to=targetFile,
                         existsAndDifferent = false,
@@ -377,15 +476,15 @@ namespace copychanged
                         }
                     }
                     double time = (double)sw.ElapsedTicks / (double)Stopwatch.Frequency;
-                    totalCompared += length1;
+                    state.totalCompared += length1;
 
-                    double bytesPerSecond = totalCompared / time;
+                    double bytesPerSecond = state.totalCompared / time;
                     string bpsString = bytesPerSecond.ToString("#,##0.00");
                     Console.Write($"\r{bpsString} bytes per second");
 
                     if (!same)
                     {
-                        filesToFix.Add(new FileToCopy()
+                        state.filesToFix.Add(new FileToCopy()
                         {
                             from = file,
                             to = targetFile,
@@ -405,7 +504,7 @@ namespace copychanged
             string[] folders = Directory.GetDirectories(reference);
             foreach (string folder in folders)
             {
-                DoFolderRecursive(basePathReference, basePathDestination, folder, filesToCopy,filesToFix,ref totalCompared,sw);
+                DoFolderRecursive(basePathReference, basePathDestination, folder, state,sw);
             }
 
         }
