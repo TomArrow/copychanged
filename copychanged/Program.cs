@@ -158,7 +158,13 @@ namespace copychanged
                     PrintHelp();
                     return;
                 }
-                state = RunCompare(folder1, folder2);
+                try
+                {
+                    state = RunCompare(folder1, folder2);
+                } catch(Exception ex)
+                {
+                    Console.WriteLine($"Error comparing: {ex.ToString()}. Trying to salvage.");
+                }
 
             }
             else
