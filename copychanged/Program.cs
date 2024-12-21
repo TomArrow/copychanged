@@ -15,16 +15,18 @@ namespace copychanged
         public UInt64 size { get; set; }
         public UInt64 sizeTarget { get; set; }
         public bool existsAndDifferent { get; set; }
+        public bool existsAndIdentical { get; set; }
     }
 
     class PostAnalysisState
     {
         public string folder1 { get; set; }  = null;
         public string folder2 { get; set; }  = null;
+        public UInt64 totalCompared { get; set; } = 0;
+        public double totalSecondsTaken { get; set; } = 0;
         public List<FileToCopy> filesToFix { get; set; } = new List<FileToCopy>();
         public List<FileToCopy> filesToCopy { get; set; }  = new List<FileToCopy>();
-        public UInt64 totalCompared { get; set; }  = 0;
-        public double totalSecondsTaken { get; set; }  = 0;
+        public List<FileToCopy> filesConfirmed { get; set; }  = new List<FileToCopy>();
 
     }
 
@@ -42,6 +44,7 @@ namespace copychanged
             Console.WriteLine("-v,--verbose      Logging will include list of files that need to be copied (not shown by default to avoid spam). By default, _copychanged_copy.log only contains any errors or retries during copying and the count of files.");
             Console.WriteLine("-s,--save         Saves a serialized list of files that need to be processed in _copychanged_list.json");
             Console.WriteLine("-l,--load         Loads a serialized list of files that need to be processed from _copychanged_list.json");
+            Console.WriteLine("-d,--delorig      Deletes the file in the reference folder once its authenticity in the target folder is verified");
             Console.WriteLine("By default you are only told the amount of needed copy operations, no copying happens.");
             Console.WriteLine("Copy operations are ALWAYS verified and will be repeated if a difference is found.");
             Console.WriteLine("--save and --load work INDEPENDENTLY of --donew and --dochanged. You can do both or either.");
@@ -89,6 +92,7 @@ namespace copychanged
             bool verboseLog = false;
             bool doSave = false;
             bool doLoad = false;
+            bool doDelOrig = false;
 
             string folder1 = null;
             string folder2 = null;
@@ -99,6 +103,11 @@ namespace copychanged
                 {
                     Console.WriteLine("--donew/-n option detected. Will copy files that don't exist yet.");
                     doNew = true;
+                }
+                else if (arg.Equals("--delorig", StringComparison.OrdinalIgnoreCase) || arg.Equals("-d", StringComparison.OrdinalIgnoreCase))
+                {
+                    Console.WriteLine("--delorig/-d option detected. Will delete files from reference folder once their authenticity in target folder is confirmed.");
+                    doDelOrig = true;
                 }
                 else if (arg.Equals("--save",StringComparison.OrdinalIgnoreCase) || arg.Equals("-s", StringComparison.OrdinalIgnoreCase))
                 {
@@ -276,6 +285,58 @@ namespace copychanged
 
             Int64 totalSuccess = 0;
             Int64 totalFail = 0;
+            if (doDelOrig && state.filesConfirmed.Count > 0)
+            {
+                Console.WriteLine("Deleting confirmed files now");
+                foreach (FileToCopy confirmedFile in state.filesConfirmed)
+                {
+                    Console.Write($"{confirmedFile.to}...");
+                    if (!confirmedFile.existsAndIdentical)
+                    {
+                        Console.Write("wtf, not actually identical? WHAT? aborting.");
+                        continue;
+                    }
+                    try
+                    {
+                        if (File.Exists(confirmedFile.from))
+                        {
+                            File.Delete(confirmedFile.from);
+                            totalSuccess++;
+                            Console.Write($"Successfully deleted original.");
+                            if (doLog && verboseLog)
+                            {
+                                File.AppendAllText("_copychanged_fix.log", $"{confirmedFile.from} successfully deleted (identical with target file).\n");
+                            }
+                        }
+                        else
+                        {
+                            totalFail++;
+                            Console.Write($"WEIRD, original file gone? Can't delete then.");
+                            if (doLog)
+                            {
+                                File.AppendAllText("_copychanged_fix.log", $"{confirmedFile.from} can't be deleted (identical with target file). Original file is gone!\n");
+                            }
+                        }
+
+                    }
+                    catch (Exception ex)
+                    {
+                        totalFail++;
+                        Console.Write($"Error happened when trying to delete original. {ex.ToString()}");
+                        if (doLog)
+                        {
+                            File.AppendAllText("_copychanged_fix.log", $"{confirmedFile.from} failed to delete:\n{ex.ToString()}\n");
+                        }
+                    }
+                    Console.WriteLine();
+                }
+            }
+            if (doLog)
+            {
+                File.AppendAllText("_copychanged_fix.log", $"\n{totalSuccess} original files successfully deleted after confirmation of identity with target files, {totalFail} failed.\n");
+            }
+            totalSuccess = 0;
+            totalFail = 0;
             if (doChanged && state.filesToFix.Count > 0)
             {
                 Console.WriteLine("Overwriting changed files now"); 
@@ -285,6 +346,13 @@ namespace copychanged
                     int currentAttempt = 0;
                     try
                     {
+                        string folder = Path.GetDirectoryName(fileToFix.to);
+                        if (!Directory.Exists(folder))
+                        {
+                            Console.Write($"creating destination folder, WTF?!...");
+                            Directory.CreateDirectory(folder);
+                        }
+
                         bool different = true;
                         while (different)
                         {
@@ -306,11 +374,23 @@ namespace copychanged
                             else
                             {
                                 totalSuccess++;
-                                if (doLog && (verboseLog || currentAttempt > 0))
-                                {
-                                    File.AppendAllText("_copychanged_fix.log", $"{fileToFix.to} successfully updated ({currentAttempt} retries)\n");
-                                }
                                 Console.Write($"File successfully updated.");
+                                if (doDelOrig)
+                                {
+                                    File.Delete(fileToFix.from);
+                                    Console.Write($" Original deleted.");
+                                    if (doLog && (verboseLog || currentAttempt > 0))
+                                    {
+                                        File.AppendAllText("_copychanged_fix.log", $"{fileToFix.to} successfully updated, and original deleted. ({currentAttempt} retries)\n");
+                                    }
+                                }
+                                else
+                                {
+                                    if (doLog && (verboseLog || currentAttempt > 0))
+                                    {
+                                        File.AppendAllText("_copychanged_fix.log", $"{fileToFix.to} successfully updated ({currentAttempt} retries)\n");
+                                    }
+                                }
                             }
                         }
                     } catch(Exception ex)
@@ -341,6 +421,13 @@ namespace copychanged
                     int currentAttempt = 0;
                     try
                     {
+                        string folder = Path.GetDirectoryName(fileToCopy.to);
+                        if (!Directory.Exists(folder))
+                        {
+                            Console.Write($"creating destination folder...");
+                            Directory.CreateDirectory(folder);
+                        }
+
                         bool different = true;
                         while (different)
                         {
@@ -366,11 +453,23 @@ namespace copychanged
                             else
                             {
                                 totalSuccess++;
-                                if (doLog && (verboseLog || currentAttempt > 0))
-                                {
-                                    File.AppendAllText("_copychanged_copy.log", $"{fileToCopy.to} successfully copied ({currentAttempt} retries)\n");
-                                }
                                 Console.Write($"File successfully copied.");
+                                if (doDelOrig)
+                                {
+                                    File.Delete(fileToCopy.from);
+                                    Console.Write($" Original deleted.");
+                                    if (doLog && (verboseLog || currentAttempt > 0))
+                                    {
+                                        File.AppendAllText("_copychanged_copy.log", $"{fileToCopy.to} successfully copied, and original deleted. ({currentAttempt} retries)\n");
+                                    }
+                                }
+                                else
+                                {
+                                    if (doLog && (verboseLog || currentAttempt > 0))
+                                    {
+                                        File.AppendAllText("_copychanged_copy.log", $"{fileToCopy.to} successfully copied ({currentAttempt} retries)\n");
+                                    }
+                                }
                             }
                         }
                     } catch(Exception ex)
@@ -385,6 +484,8 @@ namespace copychanged
                     Console.WriteLine();
                 }
             }
+            
+
             if (doLog)
             {
                 File.AppendAllText("_copychanged_copy.log", $"\n{totalSuccess} files successfully copied, {totalFail} failed.\n");
@@ -489,6 +590,17 @@ namespace copychanged
                             from = file,
                             to = targetFile,
                             existsAndDifferent = true,
+                            size = length1,
+                            sizeTarget = length2
+                        });
+                    }
+                    else
+                    {
+                        state.filesConfirmed.Add(new FileToCopy()
+                        {
+                            from = file,
+                            to = targetFile,
+                            existsAndIdentical = true,
                             size = length1,
                             sizeTarget = length2
                         });
