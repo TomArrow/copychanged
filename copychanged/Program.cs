@@ -55,6 +55,7 @@ namespace copychanged
             Console.WriteLine("-d,--delorig         Deletes the file in the reference folder once its authenticity in the target folder is verified");
             Console.WriteLine("-y,--dosystem        Handle files inside system folders (individual files that have the System attribute are always handled)");
             Console.WriteLine("-u,--nodatecreated   Don't preserve Date Created (default does preserve it). Date Modified is always preserved regardless.");
+            Console.WriteLine("-e,--exclude         Followed up by a path, this lets you exclude a path (folder, not a file) from being considered");
             Console.WriteLine("By default you are only told the amount of needed copy operations, no copying happens.");
             Console.WriteLine("Copy operations are ALWAYS verified and will be repeated if a difference is found.");
             Console.WriteLine("--save and --load work INDEPENDENTLY of --donew and --dochanged. You can do both or either.");
@@ -62,7 +63,7 @@ namespace copychanged
 
         static JsonSerializerOptions jsonOpts = new JsonSerializerOptions() {NumberHandling= System.Text.Json.Serialization.JsonNumberHandling.AllowNamedFloatingPointLiterals| System.Text.Json.Serialization.JsonNumberHandling.AllowReadingFromString, WriteIndented = true };
 
-        static PostAnalysisState RunCompare(string folder1, string folder2)
+        static PostAnalysisState RunCompare(string folder1, string folder2,string[] excludePaths)
         {
             PostAnalysisState state = new PostAnalysisState();
             state.folder1 = Path.GetFullPath(folder1);
@@ -89,7 +90,7 @@ namespace copychanged
 
             sw.Start();
 
-            DoFolderRecursive(state.folder1, state.folder2, state.folder1, state, sw,false);
+            DoFolderRecursive(state.folder1, state.folder2, state.folder1, state, sw,false, excludePaths);
 
             sw.Stop();
 
@@ -134,12 +135,26 @@ namespace copychanged
             bool doSystem = false;
             bool ignoreDateCreated = false;
 
+            List<string> excludePaths = new List<string>();
+
             string folder1 = null;
             string folder2 = null;
 
+            bool nextIsExcludePath = false;
+
             foreach(string arg in args)
             {
-                if (arg.Equals("--donew",StringComparison.OrdinalIgnoreCase) || arg.Equals("-n", StringComparison.OrdinalIgnoreCase))
+                if (nextIsExcludePath)
+                {
+                    string toAdd = Path.GetFullPath(arg);
+                    while(toAdd.Length > 0 && (toAdd.EndsWith("\\") || toAdd.EndsWith("/")))
+                    {
+                        toAdd = toAdd.Substring(0, toAdd.Length - 1);
+                    }
+                    excludePaths.Add(toAdd);
+                    nextIsExcludePath = false;
+                }
+                else if (arg.Equals("--donew",StringComparison.OrdinalIgnoreCase) || arg.Equals("-n", StringComparison.OrdinalIgnoreCase))
                 {
                     Console.WriteLine("--donew/-n option detected. Will copy files that don't exist yet.");
                     doNew = true;
@@ -183,6 +198,11 @@ namespace copychanged
                 {
                     Console.WriteLine("--nodatecreated/-u option detected. Will NOT preserve Date Created when copying/updating files");
                     ignoreDateCreated = true;
+                }
+                else if (arg.Equals("--exclude", StringComparison.OrdinalIgnoreCase) || arg.Equals("-e", StringComparison.OrdinalIgnoreCase))
+                {
+                    Console.WriteLine("--exclude/-e option detected. Will ignore files in following path.");
+                    nextIsExcludePath = true;
                 } else if(folder1 == null)
                 {
                     folder1 = arg;
@@ -198,6 +218,16 @@ namespace copychanged
                 }
             }
 
+            while (!string.IsNullOrWhiteSpace(folder1) && (folder1.EndsWith("\\") || folder1.EndsWith("/")))
+            {
+                folder1 = folder1.Substring(0, folder1.Length - 1);
+            }
+            
+            while (!string.IsNullOrWhiteSpace(folder2) && (folder2.EndsWith("\\") || folder2.EndsWith("/")))
+            {
+                folder2 = folder2.Substring(0, folder2.Length - 1);
+            }
+
             PostAnalysisState state = null;
 
             if (!doLoad)
@@ -210,7 +240,7 @@ namespace copychanged
                 }
                 try
                 {
-                    state = RunCompare(folder1, folder2);
+                    state = RunCompare(folder1, folder2, excludePaths.ToArray());
                 } catch(Exception ex)
                 {
                     Console.WriteLine($"Error comparing: {ex.ToString()}. Trying to salvage.");
@@ -882,7 +912,7 @@ namespace copychanged
 
 
         // TODO more try here?
-        static void DoFolderRecursive(string basePathReference, string basePathDestination, string reference, PostAnalysisState state, Stopwatch sw, bool system)
+        static void DoFolderRecursive(string basePathReference, string basePathDestination, string reference, PostAnalysisState state, Stopwatch sw, bool system,string[] excludePaths)
         {
             try
             {
@@ -898,6 +928,17 @@ namespace copychanged
                 if (dirInfo.Attributes.HasFlag(FileAttributes.System) && dirInfo.Parent != null) // when dirinfo.parent is null, it's a drive. a drive is a system folder but we don't wanna classify it as system
                 {
                     system = true;
+                }
+
+                // check if this folder is excluded.
+                string normalized = Path.GetFullPath(reference);
+                foreach (string excluded in excludePaths)
+                {
+                    if (normalized.Equals(excluded,StringComparison.OrdinalIgnoreCase))
+                    {
+                        Console.WriteLine($"DoFolderRecursive: Reference path {reference} skipped due to being an excluded path.");
+                        return;
+                    }
                 }
 
                 CancellationTokenSource cts = new CancellationTokenSource();
@@ -1018,7 +1059,7 @@ namespace copychanged
                         Console.WriteLine("Aborting analysis. Continuing from current state of analysis.");
                         return;
                     }
-                    DoFolderRecursive(basePathReference, basePathDestination, folder, state,sw,system);
+                    DoFolderRecursive(basePathReference, basePathDestination, folder, state,sw,system,excludePaths);
                 }
 
             }
