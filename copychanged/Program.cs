@@ -27,6 +27,7 @@ namespace copychanged
         public string folder1 { get; set; }  = null;
         public string folder2 { get; set; }  = null;
         public UInt64 totalCompared { get; set; } = 0;
+        public UInt64 totalLookedAt { get; set; } = 0;
         public UInt64 systemCount { get; set; } = 0;
         public double totalSecondsTaken { get; set; } = 0;
         public List<FileToCopy> filesToFix { get; set; } = new List<FileToCopy>();
@@ -406,7 +407,7 @@ namespace copychanged
                         sb.AppendLine(error);
                         sb.AppendLine();
                     }
-                    File.AppendAllText("_copychanged_copy.log", sb.ToString());
+                    File.AppendAllText("_copychanged_copy.log", sb.ToString()); // TODO which file should it go to?
                     sb.Clear();
                 }
             }
@@ -780,6 +781,7 @@ namespace copychanged
             double bytesPerSecond = state.totalCompared / time;
             string bpsString = bytesPerSecond.ToString("#,##0.00");
             string totalAmount = state.totalCompared.ToString("#,##0");
+            string totalAmountLookedAt = state.totalLookedAt.ToString("#,##0");
             try
             {
                 int startLine = Math.Max(0, Console.BufferHeight - 7);
@@ -800,23 +802,29 @@ namespace copychanged
                             cutStringReverse = false;
                             break;
                         case 2:
-                            prefix = "Bytes:     ";
+                            prefix = "Bytes cmp: ";
                             toPrint = $"{totalAmount} bytes";
                             cutStringReverse = false;
                             break;
                         case 3:
-                            prefix = "Progress:  ";
-                            toPrint = $"{state.filesConfirmed.Count} same, {state.filesToCopy.Count} to copy, {state.filesToFix.Count} need fix";
+                            prefix = "Bytes:     ";
+                            toPrint = $"{totalAmountLookedAt} bytes";
+                            cutStringReverse = false;
                             break;
                         case 4:
+                            prefix = "Progress:  ";
+                            toPrint = $"{state.filesConfirmed.Count} same, {state.filesToFix.Count} need fix, {state.filesToCopy.Count} to copy, {state.systemCount} system files";
+                            cutStringReverse = false;
+                            break;
+                        case 5:
                             prefix = "File:      ";
                             toPrint = currentFile;
                             break;
-                        case 5:
+                        case 6:
                             prefix = "To:        ";
                             toPrint = destinationFolder;
                             break;
-                        case 6:
+                        case 7:
                             prefix = "From:      ";
                             if (system)
                             {
@@ -893,6 +901,7 @@ namespace copychanged
                     {
 
                         string fileRelative = Path.GetRelativePath(basePathReference, file);
+                        string fileRelativeThisFolder = Path.GetRelativePath(reference, file);
                         string targetFile = Path.Combine(basePathDestination, fileRelative);
                         if (!File.Exists(targetFile))
                         {
@@ -911,8 +920,8 @@ namespace copychanged
                             {
                                 state.systemCount++;
                             }
-                            state.totalCompared += (UInt64)info.Length;
-                            PrintUpdate(sw, reference, destinationFolder, fileRelative, state,system);
+                            state.totalLookedAt += (UInt64)info.Length;
+                            PrintUpdate(sw, reference, destinationFolder, fileRelativeThisFolder, state,system);
                             continue;
                         }
                         else
@@ -929,8 +938,9 @@ namespace copychanged
                                     same = VectorizedComparer.Same(fs1, fs2, cts.Token, default, true);
                                 }
                             }
+                            state.totalLookedAt += length1;
                             state.totalCompared += length1;
-                            PrintUpdate(sw, reference, destinationFolder, fileRelative, state, system);
+                            PrintUpdate(sw, reference, destinationFolder, fileRelativeThisFolder, state, system);
 
                             if (!same)
                             {
