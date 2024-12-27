@@ -8,6 +8,9 @@ using System.Threading;
 
 namespace copychanged
 {
+    // TODO when running from .bat, we get no printing of speed 
+    // and HDD usage is 100% however very low throughput (few MB per s)
+    // but in git bash it runs as expected with high throughput. why?
 
     class FileToCopy {
         public string from { get; set; }
@@ -16,6 +19,7 @@ namespace copychanged
         public UInt64 sizeTarget { get; set; }
         public bool existsAndDifferent { get; set; }
         public bool existsAndIdentical { get; set; }
+        public bool system { get; set; }
     }
 
     class PostAnalysisState
@@ -23,10 +27,12 @@ namespace copychanged
         public string folder1 { get; set; }  = null;
         public string folder2 { get; set; }  = null;
         public UInt64 totalCompared { get; set; } = 0;
+        public UInt64 systemCount { get; set; } = 0;
         public double totalSecondsTaken { get; set; } = 0;
         public List<FileToCopy> filesToFix { get; set; } = new List<FileToCopy>();
         public List<FileToCopy> filesToCopy { get; set; }  = new List<FileToCopy>();
         public List<FileToCopy> filesConfirmed { get; set; }  = new List<FileToCopy>();
+        public List<string> errors { get; set; }  = new List<string>();
 
     }
 
@@ -45,6 +51,7 @@ namespace copychanged
             Console.WriteLine("-s,--save         Saves a serialized list of files that need to be processed in _copychanged_list.json");
             Console.WriteLine("-l,--load         Loads a serialized list of files that need to be processed from _copychanged_list.json");
             Console.WriteLine("-d,--delorig      Deletes the file in the reference folder once its authenticity in the target folder is verified");
+            Console.WriteLine("-y,--dosystem     Handle files inside system folders (individual files that have the System attribute are always handled)");
             Console.WriteLine("By default you are only told the amount of needed copy operations, no copying happens.");
             Console.WriteLine("Copy operations are ALWAYS verified and will be repeated if a difference is found.");
             Console.WriteLine("--save and --load work INDEPENDENTLY of --donew and --dochanged. You can do both or either.");
@@ -65,26 +72,54 @@ namespace copychanged
 
             Console.Write("\nStarting file compare...");
 
+            // have a few empty lines to print our live updates to
+            Console.WriteLine();
+            Console.WriteLine();
+            Console.WriteLine();
+            Console.WriteLine();
+            Console.WriteLine();
+            Console.WriteLine();
+            Console.WriteLine();
+            Console.WriteLine();
+
             Stopwatch sw = new Stopwatch();
 
             sw.Start();
 
-            DoFolderRecursive(state.folder1, state.folder2, state.folder1, state, sw);
+            DoFolderRecursive(state.folder1, state.folder2, state.folder1, state, sw,false);
 
             sw.Stop();
 
             state.totalSecondsTaken = (double)sw.ElapsedTicks / (double)Stopwatch.Frequency;
 
+
+            try
+            {
+                Console.SetCursorPosition(Console.BufferWidth-1, Console.BufferHeight-1);
+            } catch (Exception ex)
+            {
+                Console.WriteLine($"Error resetting cursor position: {ex.ToString()}");
+            }
+            Console.WriteLine();
+            Console.WriteLine();
+
             return state;
         }
 
+
+        static bool isAnalyzing = true;
+        static bool cancelAnalysis = false;
+        static bool cancelExecute = false;
+
         static void Main(string[] args)
         {
-            if(args.Length < 2)
+            if (args.Length < 2)
             {
                 PrintHelp();
                 return;
             }
+
+            Console.CancelKeyPress += Console_CancelKeyPress;
 
             bool doNew = false;
             bool doChanged = false;
@@ -93,6 +128,7 @@ namespace copychanged
             bool doSave = false;
             bool doLoad = false;
             bool doDelOrig = false;
+            bool doSystem = false;
 
             string folder1 = null;
             string folder2 = null;
@@ -133,6 +169,11 @@ namespace copychanged
                 {
                     Console.WriteLine("--verbose/-v option detected. Will write more details into _copychanged_copy.log (if --log is specified).");
                     verboseLog = true;
+                } 
+                else if (arg.Equals("--dosystem",StringComparison.OrdinalIgnoreCase) || arg.Equals("-y", StringComparison.OrdinalIgnoreCase))
+                {
+                    Console.WriteLine("--dosystem/-y option detected. Will handle files inside system folders (default: no).");
+                    doSystem = true;
                 } else if(folder1 == null)
                 {
                     folder1 = arg;
@@ -190,6 +231,8 @@ namespace copychanged
                 }
             }
 
+            isAnalyzing = false;
+
             if (doSave)
             {
                 string json = JsonSerializer.Serialize(state, jsonOpts);
@@ -211,6 +254,12 @@ namespace copychanged
 
 
             Console.WriteLine();
+            if(state.systemCount > 0)
+            {
+                Console.ForegroundColor = ConsoleColor.Yellow;
+            }
+            Console.WriteLine($"{state.systemCount} total reference files checked are in system folders. Handling system files: {doSystem}");
+            Console.ForegroundColor = ConsoleColor.White;
             Console.WriteLine($"{state.filesToCopy.Count} files don't exist yet.");
             Console.WriteLine($"{state.filesToFix.Count} files are different:");
             foreach(FileToCopy fileToFix in state.filesToFix)
@@ -241,7 +290,12 @@ namespace copychanged
                         totalSizeDest += fileToFix.sizeTarget;
                         string size1 = fileToFix.size.ToString("#,##0");
                         string size2 = fileToFix.sizeTarget.ToString("#,##0");
-                        sb.AppendLine($"{fileToFix.from} ({size1} bytes) --> {fileToFix.to} ({size2} bytes)");
+                        string append = "";
+                        if (fileToFix.system)
+                        {
+                            append = " (SYSTEM FOLDER)";
+                        }
+                        sb.AppendLine($"{fileToFix.from} ({size1} bytes) --> {fileToFix.to} ({size2} bytes){append}");
                     }
                 }
                 else
@@ -253,6 +307,47 @@ namespace copychanged
                 sb.AppendLine();
                 sb.AppendLine($"Total: {totalCount} files totaling {sizeTotal} bytes ({sizeTotalDest} bytes of target files at this time).");
                 sb.AppendLine();
+
+
+
+                sb.AppendLine();
+                sb.AppendLine();
+                sb.AppendLine(header);
+                sb.AppendLine();
+                sb.AppendLine("Confirmed files that could/will be deleted:");
+                totalCount = (UInt64)state.filesConfirmed.Count;
+                totalSize = 0;
+                totalSizeDest = 0;
+                if (state.filesConfirmed.Count > 0)
+                {
+                    foreach (FileToCopy fileConfirmed in state.filesConfirmed)
+                    {
+                        totalSize += fileConfirmed.size;
+                        totalSizeDest += fileConfirmed.sizeTarget;
+                        if (verboseLog || fileConfirmed.system)
+                        {
+                            string size1 = fileConfirmed.size.ToString("#,##0");
+                            string size2 = fileConfirmed.sizeTarget.ToString("#,##0");
+                            string append = "";
+                            if (fileConfirmed.system)
+                            {
+                                append = " (SYSTEM FOLDER)";
+                            }
+                            sb.AppendLine($"{fileConfirmed.from} ({size1} bytes) --> {fileConfirmed.to} ({size2} bytes){append}");
+                        }
+                    }
+                }
+                else
+                {
+                    sb.AppendLine("None.");
+                }
+                sizeTotal = totalSize.ToString("#,##0");
+                sizeTotalDest = totalSizeDest.ToString("#,##0");
+                sb.AppendLine();
+                sb.AppendLine($"Total: {totalCount} files totaling {sizeTotal} bytes ({sizeTotalDest} bytes of target files at this time).");
+                sb.AppendLine();
+
+
                 File.AppendAllText("_copychanged_fix.log", sb.ToString());
                 sb.Clear();
 
@@ -268,10 +363,15 @@ namespace copychanged
                     foreach (FileToCopy fileToCopy in state.filesToCopy)
                     {
                         totalSize += fileToCopy.size;
-                        if (verboseLog)
+                        if (verboseLog || fileToCopy.system)
                         {
                             string size1 = fileToCopy.size.ToString("#,##0");
-                            sb.AppendLine($"{fileToCopy.from} ({size1} bytes) --> {fileToCopy.to} (doesn't exist)");
+                            string append = "";
+                            if (fileToCopy.system)
+                            {
+                                append = " (SYSTEM FOLDER)";
+                            }
+                            sb.AppendLine($"{fileToCopy.from} ({size1} bytes) --> {fileToCopy.to} (doesn't exist){append}");
                         }
                     }
                 }
@@ -289,13 +389,56 @@ namespace copychanged
 
             CancellationTokenSource cts = new CancellationTokenSource();
 
+            if(state.errors.Count > 0)
+            {
+                Console.WriteLine($"Encountered {state.errors.Count} errors:\n");
+                foreach(string error in state.errors)
+                {
+                    Console.WriteLine(error);
+                    Console.WriteLine();
+                }
+                if (doLog)
+                {
+                    StringBuilder sb = new StringBuilder();
+                    sb.AppendLine($"Encountered {state.errors.Count} errors:\n");
+                    foreach (string error in state.errors)
+                    {
+                        sb.AppendLine(error);
+                        sb.AppendLine();
+                    }
+                    File.AppendAllText("_copychanged_copy.log", sb.ToString());
+                    sb.Clear();
+                }
+            }
+
             Int64 totalSuccess = 0;
             Int64 totalFail = 0;
             if (doDelOrig && state.filesConfirmed.Count > 0)
             {
+                if (cancelExecute)
+                {
+                    Console.WriteLine("Canceling execution...");
+                    return;
+                }
                 Console.WriteLine("Deleting confirmed files now");
                 foreach (FileToCopy confirmedFile in state.filesConfirmed)
                 {
+                    if (cancelExecute)
+                    {
+                        Console.WriteLine("Canceling execution...");
+                        return;
+                    }
+                    if (confirmedFile.system && !doSystem)
+                    {
+                        Console.ForegroundColor = ConsoleColor.Yellow;
+                        Console.Write($"Skipping deletion of SYSTEM FILE {confirmedFile.from}.");
+                        Console.ForegroundColor = ConsoleColor.White;
+                        if (doLog)
+                        {
+                            File.AppendAllText("_copychanged_fix.log", $"{confirmedFile.from} can't be deleted (identical with target file). SYSTEM FOLDER!\n");
+                        }
+                        continue;
+                    }
                     Console.Write($"{confirmedFile.to}...");
                     if (!confirmedFile.existsAndIdentical)
                     {
@@ -306,6 +449,11 @@ namespace copychanged
                     {
                         if (File.Exists(confirmedFile.from))
                         {
+                            if (cancelExecute)
+                            {
+                                Console.WriteLine("Canceling execution...");
+                                return;
+                            }
                             File.Delete(confirmedFile.from);
                             totalSuccess++;
                             Console.Write($"Successfully deleted original.");
@@ -348,6 +496,22 @@ namespace copychanged
                 Console.WriteLine("Overwriting changed files now"); 
                 foreach (FileToCopy fileToFix in state.filesToFix)
                 {
+                    if (cancelExecute)
+                    {
+                        Console.WriteLine("Canceling execution...");
+                        return;
+                    }
+                    if (fileToFix.system && !doSystem)
+                    {
+                        Console.ForegroundColor = ConsoleColor.Yellow;
+                        Console.Write($"Skipping fixing of SYSTEM FILE {fileToFix.from}.");
+                        Console.ForegroundColor = ConsoleColor.White;
+                        if (doLog)
+                        {
+                            File.AppendAllText("_copychanged_fix.log", $"{fileToFix.from} can't be fixed. SYSTEM FOLDER!\n");
+                        }
+                        continue;
+                    }
                     Console.Write($"{fileToFix.to}...");
                     int currentAttempt = 0;
                     try
@@ -364,13 +528,28 @@ namespace copychanged
                         {
                             if (File.Exists(fileToFix.to))
                             {
+                                if (cancelExecute)
+                                {
+                                    Console.WriteLine("Canceling execution...");
+                                    return;
+                                }
                                 File.Delete(fileToFix.to);
                             } else
                             {
                                 Console.Write($"WEIRD, target file gone? Copying...");
                             }
+                            if (cancelExecute)
+                            {
+                                Console.WriteLine("Canceling execution...");
+                                return;
+                            }
                             File.Copy(fileToFix.from, fileToFix.to);
                             Console.Write($"Copied, verifying...");
+                            if (cancelExecute)
+                            {
+                                Console.WriteLine("Canceling execution...");
+                                return;
+                            }
                             different = !FilesAreSame(fileToFix.from, fileToFix.to,cts.Token);
                             if (different)
                             {
@@ -383,6 +562,11 @@ namespace copychanged
                                 Console.Write($"File successfully updated.");
                                 if (doDelOrig)
                                 {
+                                    if (cancelExecute)
+                                    {
+                                        Console.WriteLine("Canceling execution...");
+                                        return;
+                                    }
                                     File.Delete(fileToFix.from);
                                     Console.Write($" Original deleted.");
                                     if (doLog && (verboseLog || currentAttempt > 0))
@@ -423,6 +607,22 @@ namespace copychanged
                 Console.WriteLine("Copying new files now"); 
                 foreach (FileToCopy fileToCopy in state.filesToCopy)
                 {
+                    if (cancelExecute)
+                    {
+                        Console.WriteLine("Canceling execution...");
+                        return;
+                    }
+                    if (fileToCopy.system && !doSystem)
+                    {
+                        Console.ForegroundColor = ConsoleColor.Yellow;
+                        Console.Write($"Skipping copying of SYSTEM FILE {fileToCopy.from}.");
+                        Console.ForegroundColor = ConsoleColor.White;
+                        if (doLog)
+                        {
+                            File.AppendAllText("_copychanged_fix.log", $"{fileToCopy.from} can't be copied. SYSTEM FOLDER!\n");
+                        }
+                        continue;
+                    }
                     Console.Write($"{fileToCopy.to}...");
                     int currentAttempt = 0;
                     try
@@ -443,13 +643,28 @@ namespace copychanged
                                 {
                                     Console.Write($"wtf already exists... deleting...");
                                 }
+                                if (cancelExecute)
+                                {
+                                    Console.WriteLine("Canceling execution...");
+                                    return;
+                                }
                                 File.Delete(fileToCopy.to);
                             } else if (currentAttempt != 0)
                             {
                                 Console.Write($"WEIRD, target file gone? Copying again...");
                             }
+                            if (cancelExecute)
+                            {
+                                Console.WriteLine("Canceling execution...");
+                                return;
+                            }
                             File.Copy(fileToCopy.from, fileToCopy.to);
                             Console.Write($"Copied, verifying...");
+                            if (cancelExecute)
+                            {
+                                Console.WriteLine("Canceling execution...");
+                                return;
+                            }
                             different = !FilesAreSame(fileToCopy.from, fileToCopy.to,cts.Token);
                             if (different)
                             {
@@ -462,6 +677,11 @@ namespace copychanged
                                 Console.Write($"File successfully copied.");
                                 if (doDelOrig)
                                 {
+                                    if (cancelExecute)
+                                    {
+                                        Console.WriteLine("Canceling execution...");
+                                        return;
+                                    }
                                     File.Delete(fileToCopy.from);
                                     Console.Write($" Original deleted.");
                                     if (doLog && (verboseLog || currentAttempt > 0))
@@ -491,7 +711,7 @@ namespace copychanged
                 }
             }
             
-
+            
             if (doLog)
             {
                 File.AppendAllText("_copychanged_copy.log", $"\n{totalSuccess} files successfully copied, {totalFail} failed.\n");
@@ -528,6 +748,19 @@ namespace copychanged
             //Console.ReadKey();
         }
 
+        private static void Console_CancelKeyPress(object sender, ConsoleCancelEventArgs e)
+        {
+            if (isAnalyzing)
+            {
+                cancelAnalysis = true;
+            }
+            else
+            {
+                cancelExecute = true;
+            }
+            e.Cancel = true;
+        }
+
         static bool FilesAreSame(string file1, string file2, CancellationToken ct)
         {
             using (FileStream fs1 = File.OpenRead(file1))
@@ -539,90 +772,228 @@ namespace copychanged
             }
         }
 
-        // TODO more try here?
-        static void DoFolderRecursive(string basePathReference, string basePathDestination, string reference, PostAnalysisState state, Stopwatch sw)
+        static void PrintUpdate(Stopwatch sw, string currentFolder, string destinationFolder, string currentFile, PostAnalysisState state, bool system)
         {
-            if (!Directory.Exists(reference))
-            {
-                Console.WriteLine($"DoFolderRecursive: Reference path {reference} doesn't exist. Exiting.");
-                return;
-            }
-            CancellationTokenSource cts = new CancellationTokenSource();
 
-            string destinationFolder = Path.Combine(basePathDestination,Path.GetRelativePath(basePathReference,reference));
-            string[] files = Directory.GetFiles(reference);
-            foreach(string file in files)
-            {
-                string targetFile = Path.Combine(basePathDestination, Path.GetRelativePath(basePathReference, file));
-                if (!File.Exists(targetFile))
-                {
-                    FileInfo info = new FileInfo(file);
+            double time = (double)sw.ElapsedTicks / (double)Stopwatch.Frequency;
 
-                    //Console.WriteLine($"target file {targetFile} doesn't exist. must copy.");
-                    state.filesToCopy.Add(new FileToCopy() { 
-                        from=file,
-                        to=targetFile,
-                        existsAndDifferent = false,
-                        size = (UInt64)info.Length,
-                        sizeTarget = 0
-                    });
-                    continue;
-                }
-                else
+            double bytesPerSecond = state.totalCompared / time;
+            string bpsString = bytesPerSecond.ToString("#,##0.00");
+            string totalAmount = state.totalCompared.ToString("#,##0");
+            try
+            {
+                int startLine = Math.Max(0, Console.BufferHeight - 7);
+                int endLine = Console.BufferHeight;
+                for(int line = startLine; line < endLine; line++)
                 {
-                    bool same;
-                    UInt64 length1 = 0;
-                    UInt64 length2 = 0;
-                    using (FileStream fs1 = File.OpenRead(file))
+                    // clear the line
+                    Console.SetCursorPosition(0, line);
+                    if (Console.BufferWidth <= 1) continue;
+                    Console.Write(new string(' ',Console.BufferWidth-1));
+                    string toPrint = "";
+                    string prefix = "";
+                    bool cutStringReverse = true;
+                    switch (endLine - line) { // reverse order...
+                        case 1:
+                            prefix = "Speed avg: ";
+                            toPrint = $"\r{bpsString} bytes per second";
+                            cutStringReverse = false;
+                            break;
+                        case 2:
+                            prefix = "Bytes:     ";
+                            toPrint = $"{totalAmount} bytes";
+                            cutStringReverse = false;
+                            break;
+                        case 3:
+                            prefix = "Progress:  ";
+                            toPrint = $"{state.filesConfirmed.Count} same, {state.filesToCopy.Count} to copy, {state.filesToFix.Count} need fix";
+                            break;
+                        case 4:
+                            prefix = "File:      ";
+                            toPrint = currentFile;
+                            break;
+                        case 5:
+                            prefix = "To:        ";
+                            toPrint = destinationFolder;
+                            break;
+                        case 6:
+                            prefix = "From:      ";
+                            if (system)
+                            {
+                                prefix = "From(sys): ";
+                                Console.ForegroundColor = ConsoleColor.Yellow;
+                            }
+                            toPrint = currentFolder;
+                            break;
+                    }
+                    if((prefix.Length + toPrint.Length) >= Console.BufferWidth)
                     {
-                        length1 = (UInt64)fs1.Length;
-                        using (FileStream fs2 = File.OpenRead(targetFile))
+                        int lengthLimit = Console.BufferWidth - prefix.Length - 5;
+                        if (lengthLimit <= 0 || lengthLimit > toPrint.Length) continue;
+                        if (cutStringReverse)
                         {
-                            length2 = (UInt64)fs2.Length;
-                            same = VectorizedComparer.Same(fs1, fs2, cts.Token, default, true);
+                            toPrint = "... " + toPrint.Substring(toPrint.Length - lengthLimit, lengthLimit);
+                        }
+                        else
+                        {
+                            toPrint = "... " + toPrint.Substring(0, lengthLimit);
                         }
                     }
-                    double time = (double)sw.ElapsedTicks / (double)Stopwatch.Frequency;
-                    state.totalCompared += length1;
 
-                    double bytesPerSecond = state.totalCompared / time;
-                    string bpsString = bytesPerSecond.ToString("#,##0.00");
-                    Console.Write($"\r{bpsString} bytes per second");
+                    Console.SetCursorPosition(0, line);
+                    Console.Write(prefix+toPrint);
+                    Console.ForegroundColor = ConsoleColor.White;
 
-                    if (!same)
-                    {
-                        state.filesToFix.Add(new FileToCopy()
-                        {
-                            from = file,
-                            to = targetFile,
-                            existsAndDifferent = true,
-                            size = length1,
-                            sizeTarget = length2
-                        });
-                    }
-                    else
-                    {
-                        state.filesConfirmed.Add(new FileToCopy()
-                        {
-                            from = file,
-                            to = targetFile,
-                            existsAndIdentical = true,
-                            size = length1,
-                            sizeTarget = length2
-                        });
-                    }
-
-                    //Console.WriteLine($"Comparison of {file} took {time} seconds. Files are same: {same}");
-                    //if (!same) { 
-                    //   Console.WriteLine($"target file {targetFile} is different. must copy.");
-                    //}
                 }
-            }
-
-            string[] folders = Directory.GetDirectories(reference);
-            foreach (string folder in folders)
+            } catch(Exception ex)
             {
-                DoFolderRecursive(basePathReference, basePathDestination, folder, state,sw);
+                // no big deal its just the printing
+            }
+            Console.ForegroundColor = ConsoleColor.White;
+        }
+
+        // TODO more try here?
+        static void DoFolderRecursive(string basePathReference, string basePathDestination, string reference, PostAnalysisState state, Stopwatch sw, bool system)
+        {
+            try
+            {
+
+                if (!Directory.Exists(reference))
+                {
+                    Console.WriteLine($"DoFolderRecursive: Reference path {reference} doesn't exist. Exiting.");
+                    return;
+                }
+
+                DirectoryInfo dirInfo = new DirectoryInfo(reference);
+
+                if (dirInfo.Attributes.HasFlag(FileAttributes.System) && dirInfo.Parent != null) // when dirinfo.parent is null, it's a drive. a drive is a system folder but we don't wanna classify it as system
+                {
+                    system = true;
+                }
+
+                CancellationTokenSource cts = new CancellationTokenSource();
+
+                string destinationFolder = Path.Combine(basePathDestination,Path.GetRelativePath(basePathReference,reference));
+                if (cancelAnalysis)
+                {
+                    isAnalyzing = false;
+                    Console.WriteLine("Aborting analysis. Continuing from current state of analysis.");
+                    return;
+                }
+                string[] files = Directory.GetFiles(reference);
+                foreach(string file in files)
+                {
+                    if (cancelAnalysis)
+                    {
+                        isAnalyzing = false;
+                        Console.WriteLine("Aborting analysis. Continuing from current state of analysis.");
+                        return;
+                    }
+                    try
+                    {
+
+                        string fileRelative = Path.GetRelativePath(basePathReference, file);
+                        string targetFile = Path.Combine(basePathDestination, fileRelative);
+                        if (!File.Exists(targetFile))
+                        {
+                            FileInfo info = new FileInfo(file);
+
+                            //Console.WriteLine($"target file {targetFile} doesn't exist. must copy.");
+                            state.filesToCopy.Add(new FileToCopy() { 
+                                from=file,
+                                to=targetFile,
+                                existsAndDifferent = false,
+                                size = (UInt64)info.Length,
+                                sizeTarget = 0,
+                                system = system
+                            });
+                            if (system)
+                            {
+                                state.systemCount++;
+                            }
+                            state.totalCompared += (UInt64)info.Length;
+                            PrintUpdate(sw, reference, destinationFolder, fileRelative, state,system);
+                            continue;
+                        }
+                        else
+                        {
+                            bool same;
+                            UInt64 length1 = 0;
+                            UInt64 length2 = 0;
+                            using (FileStream fs1 = File.OpenRead(file))
+                            {
+                                length1 = (UInt64)fs1.Length;
+                                using (FileStream fs2 = File.OpenRead(targetFile))
+                                {
+                                    length2 = (UInt64)fs2.Length;
+                                    same = VectorizedComparer.Same(fs1, fs2, cts.Token, default, true);
+                                }
+                            }
+                            state.totalCompared += length1;
+                            PrintUpdate(sw, reference, destinationFolder, fileRelative, state, system);
+
+                            if (!same)
+                            {
+                                state.filesToFix.Add(new FileToCopy()
+                                {
+                                    from = file,
+                                    to = targetFile,
+                                    existsAndDifferent = true,
+                                    size = length1,
+                                    sizeTarget = length2,
+                                    system = system
+                                });
+                                if (system)
+                                {
+                                    state.systemCount++;
+                                }
+                            }
+                            else
+                            {
+                                state.filesConfirmed.Add(new FileToCopy()
+                                {
+                                    from = file,
+                                    to = targetFile,
+                                    existsAndIdentical = true,
+                                    size = length1,
+                                    sizeTarget = length2,
+                                    system = system
+                                });
+                                if (system)
+                                {
+                                    state.systemCount++;
+                                }
+                            }
+
+                                //Console.WriteLine($"Comparison of {file} took {time} seconds. Files are same: {same}");
+                            //if (!same) { 
+                            //   Console.WriteLine($"target file {targetFile} is different. must copy.");
+                            //}
+                        }
+                    }
+                    catch (Exception ex2)
+                    {
+
+                        state.errors.Add($"Error analyzing file {file}: {ex2.ToString()}");
+                    }
+                }
+
+                string[] folders = Directory.GetDirectories(reference);
+                foreach (string folder in folders)
+                {
+                    if (cancelAnalysis)
+                    {
+                        isAnalyzing = false;
+                        Console.WriteLine("Aborting analysis. Continuing from current state of analysis.");
+                        return;
+                    }
+                    DoFolderRecursive(basePathReference, basePathDestination, folder, state,sw,system);
+                }
+
+            }
+            catch (Exception ex)
+            {
+                state.errors.Add($"Error analyzing folder {reference}: {ex.ToString()}");
             }
 
         }
