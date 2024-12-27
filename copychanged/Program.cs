@@ -12,6 +12,7 @@ namespace copychanged
     // and HDD usage is 100% however very low throughput (few MB per s)
     // but in git bash it runs as expected with high throughput. why?
 
+    // TODO Preserve date modified and maybe date created even?
     class FileToCopy {
         public string from { get; set; }
         public string to { get; set; }
@@ -45,14 +46,15 @@ namespace copychanged
 
             Console.WriteLine("Usage: copychanged [-n,--donew] [-c,--dochanged] referencefolder destinationfolder");
             Console.WriteLine("Optional param meaning:");
-            Console.WriteLine("-n,--donew        Copy files that didn't exist yet.");
-            Console.WriteLine("-c,--dochanged    Copy files that are different (overwrite!).");
-            Console.WriteLine("-l,--log          Log what was done into _copychanged_copy.log and _copychanged_fix.log.");
-            Console.WriteLine("-v,--verbose      Logging will include list of files that need to be copied (not shown by default to avoid spam). By default, _copychanged_copy.log only contains any errors or retries during copying and the count of files.");
-            Console.WriteLine("-s,--save         Saves a serialized list of files that need to be processed in _copychanged_list.json");
-            Console.WriteLine("-l,--load         Loads a serialized list of files that need to be processed from _copychanged_list.json");
-            Console.WriteLine("-d,--delorig      Deletes the file in the reference folder once its authenticity in the target folder is verified");
-            Console.WriteLine("-y,--dosystem     Handle files inside system folders (individual files that have the System attribute are always handled)");
+            Console.WriteLine("-n,--donew           Copy files that didn't exist yet.");
+            Console.WriteLine("-c,--dochanged       Copy files that are different (overwrite!).");
+            Console.WriteLine("-l,--log             Log what was done into _copychanged_copy.log and _copychanged_fix.log.");
+            Console.WriteLine("-v,--verbose         Logging will include list of files that need to be copied (not shown by default to avoid spam). By default, _copychanged_copy.log only contains any errors or retries during copying and the count of files.");
+            Console.WriteLine("-s,--save            Saves a serialized list of files that need to be processed in _copychanged_list.json");
+            Console.WriteLine("-l,--load            Loads a serialized list of files that need to be processed from _copychanged_list.json");
+            Console.WriteLine("-d,--delorig         Deletes the file in the reference folder once its authenticity in the target folder is verified");
+            Console.WriteLine("-y,--dosystem        Handle files inside system folders (individual files that have the System attribute are always handled)");
+            Console.WriteLine("-u,--nodatecreated   Don't preserve Date Created (default does preserve it). Date Modified is always preserved regardless.");
             Console.WriteLine("By default you are only told the amount of needed copy operations, no copying happens.");
             Console.WriteLine("Copy operations are ALWAYS verified and will be repeated if a difference is found.");
             Console.WriteLine("--save and --load work INDEPENDENTLY of --donew and --dochanged. You can do both or either.");
@@ -130,6 +132,7 @@ namespace copychanged
             bool doLoad = false;
             bool doDelOrig = false;
             bool doSystem = false;
+            bool ignoreDateCreated = false;
 
             string folder1 = null;
             string folder2 = null;
@@ -175,6 +178,11 @@ namespace copychanged
                 {
                     Console.WriteLine("--dosystem/-y option detected. Will handle files inside system folders (default: no).");
                     doSystem = true;
+                } 
+                else if (arg.Equals("--nodatecreated", StringComparison.OrdinalIgnoreCase) || arg.Equals("-u", StringComparison.OrdinalIgnoreCase))
+                {
+                    Console.WriteLine("--nodatecreated/-u option detected. Will NOT preserve Date Created when copying/updating files");
+                    ignoreDateCreated = true;
                 } else if(folder1 == null)
                 {
                     folder1 = arg;
@@ -544,7 +552,8 @@ namespace copychanged
                                 Console.WriteLine("Canceling execution...");
                                 return;
                             }
-                            File.Copy(fileToFix.from, fileToFix.to);
+
+                            CopyWithDate(fileToFix.from, fileToFix.to, !ignoreDateCreated);
                             Console.Write($"Copied, verifying...");
                             if (cancelExecute)
                             {
@@ -659,7 +668,7 @@ namespace copychanged
                                 Console.WriteLine("Canceling execution...");
                                 return;
                             }
-                            File.Copy(fileToCopy.from, fileToCopy.to);
+                            CopyWithDate(fileToCopy.from, fileToCopy.to,!ignoreDateCreated);
                             Console.Write($"Copied, verifying...");
                             if (cancelExecute)
                             {
@@ -859,6 +868,18 @@ namespace copychanged
             }
             Console.ForegroundColor = ConsoleColor.White;
         }
+
+        static void CopyWithDate(string from, string to, bool withDateCreated)
+        {
+            FileInfo fi = new FileInfo(from);
+            File.Copy(from, to);
+            if (withDateCreated)
+            {
+                File.SetCreationTime(to, fi.CreationTime);
+            }
+            File.SetLastWriteTime(to,fi.LastWriteTime); // this is done automatically by file.copy i think but can't hurt to do it for safety in case it doesnt work on other OSes?
+        }
+
 
         // TODO more try here?
         static void DoFolderRecursive(string basePathReference, string basePathDestination, string reference, PostAnalysisState state, Stopwatch sw, bool system)
