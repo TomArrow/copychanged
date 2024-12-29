@@ -559,7 +559,8 @@ namespace copychanged
                         if (!Directory.Exists(folder))
                         {
                             Console.Write($"creating destination folder, WTF?!...");
-                            Directory.CreateDirectory(folder);
+                            //Directory.CreateDirectory(folder);
+                            MakeFolderWithDate(Path.GetDirectoryName(fileToFix.from), folder, !ignoreDateCreated);
                         }
 
                         bool different = true;
@@ -671,7 +672,8 @@ namespace copychanged
                         if (!Directory.Exists(folder))
                         {
                             Console.Write($"creating destination folder...");
-                            Directory.CreateDirectory(folder);
+                            //Directory.CreateDirectory(folder);
+                            MakeFolderWithDate(Path.GetDirectoryName(fileToCopy.from),folder,!ignoreDateCreated);
                         }
 
                         bool different = true;
@@ -908,6 +910,17 @@ namespace copychanged
                 File.SetCreationTime(to, fi.CreationTime);
             }
             File.SetLastWriteTime(to,fi.LastWriteTime); // this is done automatically by file.copy i think but can't hurt to do it for safety in case it doesnt work on other OSes?
+        }
+
+        static void MakeFolderWithDate(string from, string to, bool withDateCreated)
+        {
+            DirectoryInfo di = new DirectoryInfo(from);
+            Directory.CreateDirectory(to);
+            if (withDateCreated)
+            {
+                Directory.SetCreationTime(to, di.CreationTime);
+            }
+            Directory.SetLastWriteTime(to, di.LastWriteTime); // this is done automatically by file.copy i think but can't hurt to do it for safety in case it doesnt work on other OSes?
         }
 
 
