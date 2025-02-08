@@ -13,6 +13,19 @@ namespace copychanged
     // but in git bash it runs as expected with high throughput. why?
 
     // TODO Preserve date modified and maybe date created even?
+    // TODO folder date modified: restore ata the end of copying to that folder.
+
+    // TODO copy empty folders?
+
+
+    // IMPORTANT: Path concept
+    // Because Windows acts strange with paths and Path.GetFullPath etc., and we want to be able to access all kinds of folder/file names (trailing/leading zeros and dots at end),
+    // we need a solid concept. We will ignore any kind of case sensitiveness, that will get too complicated.
+    // For consistency, we are going to make one compromise: The original paths will be normalized as per usual to get good base paths to build off of.
+    // From there, we will turn them absolute via \\?\ prefix. (how to handle linux?)
+    // GetFiles and GetDirectories will give us \\?\ paths in return as well
+    // We will avoid using Path.GetRelativePath and instead do our own variant that uses substrings (which will hopefully work because we sanitized the original paths already and they are in a semi-consistent form)
+    // 
     class FileToCopy {
         public string from { get; set; }
         public string to { get; set; }
@@ -66,8 +79,8 @@ namespace copychanged
         static PostAnalysisState RunCompare(string folder1, string folder2,string[] excludePaths)
         {
             PostAnalysisState state = new PostAnalysisState();
-            state.folder1 = Path.GetFullPath(folder1);
-            state.folder2 = Path.GetFullPath(folder2);
+            state.folder1 = SafeGetFullPath(folder1);
+            state.folder2 = SafeGetFullPath(folder2);
 
             state.filesToCopy = new List<FileToCopy>();
             state.filesToFix = new List<FileToCopy>();
@@ -146,7 +159,7 @@ namespace copychanged
             {
                 if (nextIsExcludePath)
                 {
-                    string toAdd = Path.GetFullPath(arg);
+                    string toAdd = SafeGetFullPath(arg);
                     while(toAdd.Length > 0 && (toAdd.EndsWith("\\") || toAdd.EndsWith("/")))
                     {
                         toAdd = toAdd.Substring(0, toAdd.Length - 1);
@@ -249,7 +262,7 @@ namespace copychanged
             }
             else
             {
-                if (!File.Exists("_copychanged_list.json"))
+                if (!SafeFileExists("_copychanged_list.json"))
                 {
                     Console.WriteLine($"Can't load list, _copychanged_list.json not found.");
                     PrintHelp();
@@ -275,17 +288,17 @@ namespace copychanged
             if (doSave)
             {
                 string json = JsonSerializer.Serialize(state, jsonOpts);
-                if (File.Exists("_copychanged_list.json")) // make up to 2 backups just in case. shitty way of doing it tho xd.
+                if (SafeFileExists("_copychanged_list.json")) // make up to 2 backups just in case. shitty way of doing it tho xd.
                 {
-                    if (File.Exists("_copychanged_list.json.bak"))
+                    if (SafeFileExists("_copychanged_list.json.bak"))
                     {
-                        if (File.Exists("_copychanged_list.json.finalbak"))
+                        if (SafeFileExists("_copychanged_list.json.finalbak"))
                         {
-                            File.Delete("_copychanged_list.json.finalbak");
+                            SafeFileDelete("_copychanged_list.json.finalbak");
                         }
-                        File.Move("_copychanged_list.json.bak", "_copychanged_list.json.finalbak");
+                        SafeFileMove("_copychanged_list.json.bak", "_copychanged_list.json.finalbak");
                     }
-                    File.Move("_copychanged_list.json", "_copychanged_list.json.bak");
+                    SafeFileMove("_copychanged_list.json", "_copychanged_list.json.bak");
                 }
                 File.WriteAllText("_copychanged_list.json",json);
             }
@@ -486,14 +499,14 @@ namespace copychanged
                     }
                     try
                     {
-                        if (File.Exists(confirmedFile.from))
+                        if (SafeFileExists(confirmedFile.from))
                         {
                             if (cancelExecute)
                             {
                                 Console.WriteLine("Canceling execution...");
                                 return;
                             }
-                            File.Delete(confirmedFile.from);
+                            SafeFileDelete(confirmedFile.from);
                             totalSuccess++;
                             Console.Write($"Successfully deleted original.");
                             if (doLog && verboseLog)
@@ -555,25 +568,25 @@ namespace copychanged
                     int currentAttempt = 0;
                     try
                     {
-                        string folder = Path.GetDirectoryName(fileToFix.to);
-                        if (!Directory.Exists(folder))
+                        string folder = SafeGetDirName(fileToFix.to);
+                        if (!SafeDirExists(folder))
                         {
                             Console.Write($"creating destination folder, WTF?!...");
                             //Directory.CreateDirectory(folder);
-                            MakeFolderWithDate(Path.GetDirectoryName(fileToFix.from), folder, !ignoreDateCreated);
+                            MakeFolderWithDate(SafeGetDirName(fileToFix.from), folder, !ignoreDateCreated);
                         }
 
                         bool different = true;
                         while (different)
                         {
-                            if (File.Exists(fileToFix.to))
+                            if (SafeFileExists(fileToFix.to))
                             {
                                 if (cancelExecute)
                                 {
                                     Console.WriteLine("Canceling execution...");
                                     return;
                                 }
-                                File.Delete(fileToFix.to);
+                                SafeFileDelete(fileToFix.to);
                             } else
                             {
                                 Console.Write($"WEIRD, target file gone? Copying...");
@@ -608,7 +621,7 @@ namespace copychanged
                                         Console.WriteLine("Canceling execution...");
                                         return;
                                     }
-                                    File.Delete(fileToFix.from);
+                                    SafeFileDelete(fileToFix.from);
                                     Console.Write($" Original deleted.");
                                     if (doLog && (verboseLog || currentAttempt > 0))
                                     {
@@ -668,18 +681,18 @@ namespace copychanged
                     int currentAttempt = 0;
                     try
                     {
-                        string folder = Path.GetDirectoryName(fileToCopy.to);
-                        if (!Directory.Exists(folder))
+                        string folder = SafeGetDirName(fileToCopy.to);
+                        if (!SafeDirExists(folder))
                         {
                             Console.Write($"creating destination folder...");
                             //Directory.CreateDirectory(folder);
-                            MakeFolderWithDate(Path.GetDirectoryName(fileToCopy.from),folder,!ignoreDateCreated);
+                            MakeFolderWithDate(SafeGetDirName(fileToCopy.from),folder,!ignoreDateCreated);
                         }
 
                         bool different = true;
                         while (different)
                         {
-                            if (File.Exists(fileToCopy.to))
+                            if (SafeFileExists(fileToCopy.to))
                             {
                                 if (currentAttempt == 0)
                                 {
@@ -690,7 +703,7 @@ namespace copychanged
                                     Console.WriteLine("Canceling execution...");
                                     return;
                                 }
-                                File.Delete(fileToCopy.to);
+                                SafeFileDelete(fileToCopy.to);
                             } else if (currentAttempt != 0)
                             {
                                 Console.Write($"WEIRD, target file gone? Copying again...");
@@ -724,7 +737,7 @@ namespace copychanged
                                         Console.WriteLine("Canceling execution...");
                                         return;
                                     }
-                                    File.Delete(fileToCopy.from);
+                                    SafeFileDelete(fileToCopy.from);
                                     Console.Write($" Original deleted.");
                                     if (doLog && (verboseLog || currentAttempt > 0))
                                     {
@@ -904,6 +917,8 @@ namespace copychanged
         static void CopyWithDate(string from, string to, bool withDateCreated)
         {
             FileInfo fi = new FileInfo(from);
+            from = MakePathSafe(from);
+            to = MakePathSafe(to);
             File.Copy(from, to);
             if (withDateCreated)
             {
@@ -912,9 +927,78 @@ namespace copychanged
             File.SetLastWriteTime(to,fi.LastWriteTime); // this is done automatically by file.copy i think but can't hurt to do it for safety in case it doesnt work on other OSes?
         }
 
+        static string MakePathSafe(string path)
+        {
+            if (!path.StartsWith(@"\\?\"))
+            {
+                return @$"\\?\{path}";
+            }
+            else
+            {
+                return path;
+            }
+        }
+        static string MakePathUnsafe(string path)
+        {
+            if (path.StartsWith(@"\\?\"))
+            {
+                return path.Substring(@"\\?\".Length);
+            }
+            else
+            {
+                return path;
+            }
+        }
+        static bool SafeDirExists(string folder) 
+        {
+            return Directory.Exists(MakePathSafe(folder));
+        }
+        static string SafeGetDirName(string path) 
+        {
+            return Path.GetDirectoryName(MakePathSafe(path));
+        }
+        static string SafeGetFullPath(string path) 
+        {
+            return Path.GetFullPath(MakePathSafe(path));
+        }
+        static string[] SafeDirGetFiles(string folder) 
+        {
+            return Directory.GetFiles(MakePathSafe(folder));
+        }
+        static string[] SafeDirGetDirs(string folder) 
+        {
+            return Directory.GetDirectories(MakePathSafe(folder));
+        }
+        static bool SafeFileExists(string file) 
+        {
+            return File.Exists(MakePathSafe(file));
+        }
+        static string SafeGetRelPath(string a, string b) 
+        {
+            // Path.GetRelativePath breaks with the safe prefix. idk
+            return Path.GetRelativePath(MakePathUnsafe(a), MakePathUnsafe(b));
+        }
+        static void SafeFileDelete(string file) 
+        {
+            File.Delete(MakePathSafe(file));
+        }
+        static void SafeFileCopy(string file,string file2) 
+        {
+            File.Copy(MakePathSafe(file), MakePathSafe(file2));
+        }
+        static void SafeFileMove(string file,string file2) 
+        {
+            File.Move(MakePathSafe(file), MakePathSafe(file2));
+        }
+        static void SafeCreateDirectory(string folder)
+        {
+            Directory.CreateDirectory(MakePathSafe(folder));
+        }
         static void MakeFolderWithDate(string from, string to, bool withDateCreated)
         {
             DirectoryInfo di = new DirectoryInfo(from);
+            from = MakePathSafe(from);
+            to = MakePathSafe(to);
             Directory.CreateDirectory(to);
             if (withDateCreated)
             {
@@ -930,7 +1014,7 @@ namespace copychanged
             try
             {
 
-                if (!Directory.Exists(reference))
+                if (!SafeDirExists(reference))
                 {
                     Console.WriteLine($"DoFolderRecursive: Reference path {reference} doesn't exist. Exiting.");
                     return;
@@ -944,7 +1028,7 @@ namespace copychanged
                 }
 
                 // check if this folder is excluded.
-                string normalized = Path.GetFullPath(reference);
+                string normalized = SafeGetFullPath(reference);
                 foreach (string excluded in excludePaths)
                 {
                     if (normalized.Equals(excluded,StringComparison.OrdinalIgnoreCase))
@@ -956,14 +1040,14 @@ namespace copychanged
 
                 CancellationTokenSource cts = new CancellationTokenSource();
 
-                string destinationFolder = Path.Combine(basePathDestination,Path.GetRelativePath(basePathReference,reference));
+                string destinationFolder = Path.Combine(basePathDestination, SafeGetRelPath(basePathReference,reference));
                 if (cancelAnalysis)
                 {
                     isAnalyzing = false;
                     Console.WriteLine("Aborting analysis. Continuing from current state of analysis.");
                     return;
                 }
-                string[] files = Directory.GetFiles(reference);
+                string[] files = SafeDirGetFiles(reference);
                 foreach(string file in files)
                 {
                     if (cancelAnalysis)
@@ -975,10 +1059,10 @@ namespace copychanged
                     try
                     {
 
-                        string fileRelative = Path.GetRelativePath(basePathReference, file);
-                        string fileRelativeThisFolder = Path.GetRelativePath(reference, file);
+                        string fileRelative = SafeGetRelPath(basePathReference, file);
+                        string fileRelativeThisFolder = SafeGetRelPath(reference, file);
                         string targetFile = Path.Combine(basePathDestination, fileRelative);
-                        if (!File.Exists(targetFile))
+                        if (!SafeFileExists(targetFile))
                         {
                             FileInfo info = new FileInfo(file);
 
@@ -1063,7 +1147,7 @@ namespace copychanged
                     }
                 }
 
-                string[] folders = Directory.GetDirectories(reference);
+                string[] folders = SafeDirGetDirs(reference);
                 foreach (string folder in folders)
                 {
                     if (cancelAnalysis)

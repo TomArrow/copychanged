@@ -164,6 +164,16 @@ namespace copychanged
                         unequal.b = true;
                         return;
                     }
+
+                    lock (chunks)
+                    {
+                        while (chunks.Count > 4 && !unequal.b)
+                        {
+                            // avoid crazy RAM overflow if one stream is reading much faster than the other
+                            System.Threading.Monitor.Wait(chunks);
+                        }
+                    }
+
                     byte[] buff = new byte[Math.Min(streamChunkLength, stream.Length - dataRead)];
                     size_t amountRead = 0;
                     while (amountRead < buff.Length && !unequal.b)
@@ -277,8 +287,16 @@ namespace copychanged
 #if DEBUGSTREAM
                     Debug.WriteLine("Same(s,s): dequeueing");
 #endif
-                    chunk1 = compareChunks1.Dequeue();
-                    chunk2 = compareChunks2.Dequeue();
+                    lock (compareChunks1)
+                    {
+                        chunk1 = compareChunks1.Dequeue();
+                        System.Threading.Monitor.Pulse(compareChunks1);
+                    }
+                    lock (compareChunks2)
+                    {
+                        chunk2 = compareChunks2.Dequeue();
+                        System.Threading.Monitor.Pulse(compareChunks2);
+                    }
                 }
 
                 totalCompared += (UInt64)chunk1.Length;
