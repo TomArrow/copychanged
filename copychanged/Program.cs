@@ -79,8 +79,8 @@ namespace copychanged
         static PostAnalysisState RunCompare(string folder1, string folder2,string[] excludePaths)
         {
             PostAnalysisState state = new PostAnalysisState();
-            state.folder1 = SafeGetFullPath(folder1);
-            state.folder2 = SafeGetFullPath(folder2);
+            state.folder1 = folder1;// SafeGetFullPath(folder1);
+            state.folder2 = folder2;// SafeGetFullPath(folder2);
 
             state.filesToCopy = new List<FileToCopy>();
             state.filesToFix = new List<FileToCopy>();
@@ -159,11 +159,12 @@ namespace copychanged
             {
                 if (nextIsExcludePath)
                 {
-                    string toAdd = SafeGetFullPath(arg);
-                    while(toAdd.Length > 0 && (toAdd.EndsWith("\\") || toAdd.EndsWith("/")))
-                    {
-                        toAdd = toAdd.Substring(0, toAdd.Length - 1);
-                    }
+                    string toAdd = NormalizePathEnding(SemiSafeGetFullPath(arg));
+                    //while(toAdd.Length > 0 && (toAdd.EndsWith("\\") || toAdd.EndsWith("/")))
+                    //{
+                    //    toAdd = toAdd.Substring(0, toAdd.Length - 1);
+                    //}
+                    //toAdd += Path.DirectorySeparatorChar;
                     excludePaths.Add(toAdd);
                     nextIsExcludePath = false;
                 }
@@ -231,15 +232,18 @@ namespace copychanged
                 }
             }
 
-            while (!string.IsNullOrWhiteSpace(folder1) && (folder1.EndsWith("\\") || folder1.EndsWith("/")))
-            {
-                folder1 = folder1.Substring(0, folder1.Length - 1);
-            }
+            folder1 = SemiSafeGetFullPath(folder1);
+            folder2 = SemiSafeGetFullPath(folder2);
+
+            //while (!string.IsNullOrWhiteSpace(folder1) && (folder1.EndsWith("\\") || folder1.EndsWith("/")))
+            //{
+            //    folder1 = folder1.Substring(0, folder1.Length - 1);
+            //}
             
-            while (!string.IsNullOrWhiteSpace(folder2) && (folder2.EndsWith("\\") || folder2.EndsWith("/")))
-            {
-                folder2 = folder2.Substring(0, folder2.Length - 1);
-            }
+            //while (!string.IsNullOrWhiteSpace(folder2) && (folder2.EndsWith("\\") || folder2.EndsWith("/")))
+            //{
+            //    folder2 = folder2.Substring(0, folder2.Length - 1);
+            //}
 
             PostAnalysisState state = null;
 
@@ -927,78 +931,11 @@ namespace copychanged
             File.SetLastWriteTime(to,fi.LastWriteTime); // this is done automatically by file.copy i think but can't hurt to do it for safety in case it doesnt work on other OSes?
         }
 
-        static string MakePathSafe(string path)
-        {
-            if (!path.StartsWith(@"\\?\"))
-            {
-                return @$"\\?\{path}";
-            }
-            else
-            {
-                return path;
-            }
-        }
-        static string MakePathUnsafe(string path)
-        {
-            if (path.StartsWith(@"\\?\"))
-            {
-                return path.Substring(@"\\?\".Length);
-            }
-            else
-            {
-                return path;
-            }
-        }
-        static bool SafeDirExists(string folder) 
-        {
-            return Directory.Exists(MakePathSafe(folder));
-        }
-        static string SafeGetDirName(string path) 
-        {
-            return Path.GetDirectoryName(MakePathSafe(path));
-        }
-        static string SafeGetFullPath(string path) 
-        {
-            return Path.GetFullPath(MakePathSafe(path));
-        }
-        static string[] SafeDirGetFiles(string folder) 
-        {
-            return Directory.GetFiles(MakePathSafe(folder));
-        }
-        static string[] SafeDirGetDirs(string folder) 
-        {
-            return Directory.GetDirectories(MakePathSafe(folder));
-        }
-        static bool SafeFileExists(string file) 
-        {
-            return File.Exists(MakePathSafe(file));
-        }
-        static string SafeGetRelPath(string a, string b) 
-        {
-            // Path.GetRelativePath breaks with the safe prefix. idk
-            return Path.GetRelativePath(MakePathUnsafe(a), MakePathUnsafe(b));
-        }
-        static void SafeFileDelete(string file) 
-        {
-            File.Delete(MakePathSafe(file));
-        }
-        static void SafeFileCopy(string file,string file2) 
-        {
-            File.Copy(MakePathSafe(file), MakePathSafe(file2));
-        }
-        static void SafeFileMove(string file,string file2) 
-        {
-            File.Move(MakePathSafe(file), MakePathSafe(file2));
-        }
-        static void SafeCreateDirectory(string folder)
-        {
-            Directory.CreateDirectory(MakePathSafe(folder));
-        }
         static void MakeFolderWithDate(string from, string to, bool withDateCreated)
         {
             DirectoryInfo di = new DirectoryInfo(from);
-            from = MakePathSafe(from);
-            to = MakePathSafe(to);
+            from = NormalizePathEnding(MakePathSafe(from));
+            to = NormalizePathEnding(MakePathSafe(to));
             Directory.CreateDirectory(to);
             if (withDateCreated)
             {
@@ -1028,7 +965,7 @@ namespace copychanged
                 }
 
                 // check if this folder is excluded.
-                string normalized = SafeGetFullPath(reference);
+                string normalized = NormalizePathEnding(reference);
                 foreach (string excluded in excludePaths)
                 {
                     if (normalized.Equals(excluded,StringComparison.OrdinalIgnoreCase))
@@ -1040,7 +977,7 @@ namespace copychanged
 
                 CancellationTokenSource cts = new CancellationTokenSource();
 
-                string destinationFolder = Path.Combine(basePathDestination, SafeGetRelPath(basePathReference,reference));
+                string destinationFolder = SafePathCombine(basePathDestination, SafeGetRelPath(basePathReference,reference));
                 if (cancelAnalysis)
                 {
                     isAnalyzing = false;
@@ -1061,7 +998,7 @@ namespace copychanged
 
                         string fileRelative = SafeGetRelPath(basePathReference, file);
                         string fileRelativeThisFolder = SafeGetRelPath(reference, file);
-                        string targetFile = Path.Combine(basePathDestination, fileRelative);
+                        string targetFile = SafePathCombine(basePathDestination, fileRelative);
                         if (!SafeFileExists(targetFile))
                         {
                             FileInfo info = new FileInfo(file);
@@ -1165,6 +1102,124 @@ namespace copychanged
                 state.errors.Add($"Error analyzing folder {reference}: {ex.ToString()}");
             }
 
+        }
+
+        // DO NOT call this with relative paths
+        static string MakePathSafe(string path)
+        {
+            // we assume that anything going into this function is already a full (not relative) path.
+            char startLetter = path[0];
+            if (startLetter >='A' && startLetter <= 'Z' && path.Substring(1,2)==@":\") // prefix windows drive paths
+            {
+                return @$"\\?\{path}";
+            }
+            else
+            {
+                return path;
+            }
+        }
+        static string MakePathUnsafe(string path)
+        {
+            if (path.StartsWith(@"\\?\"))
+            {
+                return path.Substring(@"\\?\".Length);
+            }
+            else
+            {
+                return path;
+            }
+        }
+        static bool SafeDirExists(string folder)
+        {
+            bool exists = Directory.Exists(NormalizePathEnding(MakePathSafe(folder)));
+            return exists;
+        }
+        static string SafeGetDirName(string path)
+        {
+            return Path.GetDirectoryName(MakePathSafe(path));
+        }
+        //static string SafeGetFullPath(string path)
+        //{
+        //    return Path.GetFullPath(MakePathSafe(path));
+        //}
+        static string SemiSafeGetFullPath(string path) // this isnt TRULY safe but we have to normalize paths going into the program once at least so stuff is somewhat consistent. we could be getting relative paths, paths with ../ etc
+        {
+            if(!path.EndsWith('/') && !path.EndsWith('\\'))
+            {
+                path += Path.DirectorySeparatorChar;
+            }
+            path = MakePathSafe(Path.GetFullPath(path));
+            if (!path.EndsWith('/') && !path.EndsWith('\\'))
+            {
+                path += Path.DirectorySeparatorChar;
+            }
+            return path;
+        }
+        static string NormalizePathEnding(string path)
+        {
+            if (!path.EndsWith('/') && !path.EndsWith('\\'))
+            {
+                path += Path.DirectorySeparatorChar;
+            }
+            return path;
+        }
+        static string[] SafeDirGetFiles(string folder)
+        {
+            return Directory.GetFiles(NormalizePathEnding(MakePathSafe(folder)));
+        }
+        static string[] SafeDirGetDirs(string folder)
+        {
+            return Directory.GetDirectories(NormalizePathEnding(MakePathSafe(folder)));
+        }
+        static bool SafeFileExists(string file)
+        {
+            return File.Exists(MakePathSafe(file));
+        }
+        static string SafePathCombine(string a, string b)
+        {
+            bool aEndsWithSep = a.EndsWith('/') || a.EndsWith('\\');
+            bool bStartsWithSep = b.StartsWith('/') || b.StartsWith('\\');
+            if (aEndsWithSep && bStartsWithSep)
+            {
+                return a+b.Substring(1);
+            }
+            else if (!aEndsWithSep && !bStartsWithSep)
+            {
+                return a+Path.DirectorySeparatorChar+b;
+            }
+            else
+            {
+                return a+b;
+            }
+        }
+        static string SafeGetRelPath(string a, string b)
+        {
+            // Path.GetRelativePath breaks with the safe prefix. idk
+            //return Path.GetRelativePath(MakePathUnsafe(a), MakePathUnsafe(b));
+            if (b.StartsWith(a,StringComparison.InvariantCultureIgnoreCase))
+            {
+                return b.Substring(a.Length);
+            }
+            else
+            {
+                return null;
+            }
+        }
+        static void SafeFileDelete(string file)
+        {
+            File.Delete(MakePathSafe(file));
+        }
+        static void SafeFileCopy(string file, string file2)
+        {
+            File.Copy(MakePathSafe(file), MakePathSafe(file2));
+        }
+        static void SafeFileMove(string file, string file2)
+        {
+            File.Move(MakePathSafe(file), MakePathSafe(file2));
+        }
+        static void SafeCreateDirectory(string folder)
+        {
+            Directory.CreateDirectory(MakePathSafe(folder));
         }
 
     }
