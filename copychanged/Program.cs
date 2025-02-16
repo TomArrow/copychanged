@@ -76,10 +76,11 @@ namespace copychanged
 
         static JsonSerializerOptions jsonOpts = new JsonSerializerOptions() {NumberHandling= System.Text.Json.Serialization.JsonNumberHandling.AllowNamedFloatingPointLiterals| System.Text.Json.Serialization.JsonNumberHandling.AllowReadingFromString, WriteIndented = true };
 
+        // MAKE SURE ANY PATHS GIVEN TO THIS ARE SAFE (meaning normalized and absolute \\?\ paths)
         static PostAnalysisState RunCompare(string folder1, string folder2,string[] excludePaths)
         {
             PostAnalysisState state = new PostAnalysisState();
-            state.folder1 = folder1;// SafeGetFullPath(folder1);
+            state.folder1 = folder1;// SafeGetFullPath(folder1); // already taken care of earlier during program start
             state.folder2 = folder2;// SafeGetFullPath(folder2);
 
             state.filesToCopy = new List<FileToCopy>();
@@ -232,8 +233,8 @@ namespace copychanged
                 }
             }
 
-            folder1 = SemiSafeGetFullPath(folder1);
-            folder2 = SemiSafeGetFullPath(folder2);
+            folder1 = NormalizePathEnding(SemiSafeGetFullPath(folder1));
+            folder2 = NormalizePathEnding(SemiSafeGetFullPath(folder2));
 
             //while (!string.IsNullOrWhiteSpace(folder1) && (folder1.EndsWith("\\") || folder1.EndsWith("/")))
             //{
@@ -292,17 +293,19 @@ namespace copychanged
             if (doSave)
             {
                 string json = JsonSerializer.Serialize(state, jsonOpts);
-                if (SafeFileExists("_copychanged_list.json")) // make up to 2 backups just in case. shitty way of doing it tho xd.
+                // TODO use safe file functions here? I did the SafeFileExists first but its rly a bit wrong since i'm passing relative paths into it
+                // I guess for now the working directory is not going to support odd paths
+                if (File.Exists("_copychanged_list.json")) // make up to 2 backups just in case. shitty way of doing it tho xd.
                 {
-                    if (SafeFileExists("_copychanged_list.json.bak"))
+                    if (File.Exists("_copychanged_list.json.bak"))
                     {
-                        if (SafeFileExists("_copychanged_list.json.finalbak"))
+                        if (File.Exists("_copychanged_list.json.finalbak"))
                         {
-                            SafeFileDelete("_copychanged_list.json.finalbak");
+                            File.Delete("_copychanged_list.json.finalbak");
                         }
-                        SafeFileMove("_copychanged_list.json.bak", "_copychanged_list.json.finalbak");
+                        File.Move("_copychanged_list.json.bak", "_copychanged_list.json.finalbak");
                     }
-                    SafeFileMove("_copychanged_list.json", "_copychanged_list.json.bak");
+                    File.Move("_copychanged_list.json", "_copychanged_list.json.bak");
                 }
                 File.WriteAllText("_copychanged_list.json",json);
             }
@@ -608,7 +611,7 @@ namespace copychanged
                                 Console.WriteLine("Canceling execution...");
                                 return;
                             }
-                            different = !FilesAreSame(fileToFix.from, fileToFix.to,cts.Token);
+                            different = !FilesAreSame(fileToFix.from, fileToFix.to,cts.Token); // should i do a safe variant here too? but rly we are already taking care of it way earlier. the .to and .from properties should contain safe paths
                             if (different)
                             {
                                 currentAttempt++;
@@ -920,8 +923,8 @@ namespace copychanged
 
         static void CopyWithDate(string from, string to, bool withDateCreated)
         {
-            FileInfo fi = new FileInfo(from);
             from = MakePathSafe(from);
+            FileInfo fi = new FileInfo(from);
             to = MakePathSafe(to);
             File.Copy(from, to);
             if (withDateCreated)
@@ -933,8 +936,8 @@ namespace copychanged
 
         static void MakeFolderWithDate(string from, string to, bool withDateCreated)
         {
-            DirectoryInfo di = new DirectoryInfo(from);
             from = NormalizePathEnding(MakePathSafe(from));
+            DirectoryInfo di = new DirectoryInfo(from);
             to = NormalizePathEnding(MakePathSafe(to));
             Directory.CreateDirectory(to);
             if (withDateCreated)
@@ -1093,7 +1096,7 @@ namespace copychanged
                         Console.WriteLine("Aborting analysis. Continuing from current state of analysis.");
                         return;
                     }
-                    DoFolderRecursive(basePathReference, basePathDestination, folder, state,sw,system,excludePaths);
+                    DoFolderRecursive(basePathReference, basePathDestination, NormalizePathEnding(MakePathSafe(folder)), state,sw,system,excludePaths);
                 }
 
             }
@@ -1136,7 +1139,7 @@ namespace copychanged
         }
         static string SafeGetDirName(string path)
         {
-            return Path.GetDirectoryName(MakePathSafe(path));
+            return NormalizePathEnding(Path.GetDirectoryName(MakePathSafe(path)));
         }
         //static string SafeGetFullPath(string path)
         //{
